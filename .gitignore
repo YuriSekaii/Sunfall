@@ -1,0 +1,22 @@
+# Godot 4+ specific ignores
+.godot/
+*.translation
+
+# Imported files & exports
+.import/
+export_presets.cfg
+
+# Extracted engine binaries (keep git clean; engine.zip is used for distribution)
+Godot*.exe
+godot*.exe
+
+# Extracted portable Git (keep git clean; git.zip is used for distribution)
+git_portable/
+
+# Blender backups
+*.blend1
+*.blend2
+
+# OS generated files
+.DS_Store
+Thumbs.db
