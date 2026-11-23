@@ -206,6 +206,7 @@ func _run_checks() -> void:
 
 	player.velocity = Vector3.ZERO
 	player.global_position = Vector3(0.0, 0.0, 8.0)
+	test_z.hp = test_z.max_hp
 	test_z.global_position = Vector3(0.0, 0.0, 6.6)
 	test_z.stagger_timer = 0.0
 	await physics_frame
@@ -213,12 +214,24 @@ func _run_checks() -> void:
 	var hp_before_dk := test_z.hp
 	var dk_hit := player._execute_kick_hit(true)
 	_check(dk_hit and test_z.hp < hp_before_dk and test_z.knockback_vel.length() > 15.0, "Dropkick hit must deal damage and heavy 2.0x knockback")
+	_check(test_z.is_downed(), "Dropkick hit must knock zombie down (is_downed == true)")
 
-	test_z.global_position = Vector3(0.0, 0.0, 6.6)
-	test_z.stagger_timer = 0.0
+	var vault_z := Zombie.new()
+	vault_z.configure(true, false)
+	world.add_child(vault_z)
+	player.velocity = Vector3.ZERO
+	player.global_position = Vector3(0.0, 0.0, 8.0)
+	vault_z.global_position = Vector3(0.0, 0.0, 6.6)
+	await physics_frame
 	var vaulted_z := player._try_vault_over_zombie()
-	_check(vaulted_z and player._vaulting and test_z.stagger_timer >= 2.4, "Vault-over-zombie must vault and stun zombie for 2.5s")
+	_check(vaulted_z and player._vaulting and vault_z.stagger_timer >= 2.4, "Vault-over-zombie must vault and stun zombie for 2.5s")
 	player._vaulting = false
+
+	# 8f. Headshot check, amortizer pad, dual stamina, and DLTelemetry
+	_check(vault_z.is_headshot_pos(vault_z.global_position + Vector3(0.0, 1.5, 0.0)) == true, "Zombie is_headshot_pos must detect head height")
+	_check(vault_z.is_headshot_pos(vault_z.global_position + Vector3(0.0, 0.5, 0.0)) == false, "Zombie is_headshot_pos must return false for torso/legs")
+	_check(get_nodes_in_group("amortizer").size() >= 3, "Expected amortizer landing pads in world")
+	_check(player.telemetry.get_frame_count() > 0, "DLTelemetry must record physics frames")
 
 	if outdoor_zombies.size() > 0:
 		outdoor_zombies[0].apply_stun(2.5)
@@ -229,7 +242,7 @@ func _run_checks() -> void:
 	_check(player._fpp_rig != null and player._fpp_skel != null and player._fpp_anim != null, "Player must attach dl_player_fpp.glb with Skeleton3D and AnimationPlayer")
 	_check(player._weapon_socket != null and player._weapon_socket.get_child_count() > 0, "Player BoneAttachment3D WeaponSocket must hold weapon mesh")
 	if player._fpp_anim != null:
-		for req_clip in ["idle", "walk", "sprint", "swing_right", "swing_left", "heavy_charge", "heavy_swing", "kick", "dropkick", "climb_ledge", "vault", "slide", "dodge_left", "dodge_right", "wall_run_left", "wall_run_right"]:
+		for req_clip in ["idle", "walk", "sprint", "swing_right", "swing_left", "heavy_charge", "heavy_swing", "kick", "dropkick", "climb_ledge", "vault", "slide", "dodge_left", "dodge_right", "wall_run_left", "wall_run_right", "ledge_hang", "shimmy_left", "shimmy_right", "wall_run_up", "landing_roll", "tackle", "grapple", "ground_pound", "stomp", "grab_struggle", "exhausted_swing", "crouch_idle"]:
 			_check(player._fpp_anim.has_animation(req_clip), "dl_player_fpp.glb missing animation '%s'" % req_clip)
 		_check(player._fpp_anim.is_playing(), "Player FPP AnimationPlayer must actively play an animation (not frozen)")
 

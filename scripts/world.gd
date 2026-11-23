@@ -30,9 +30,13 @@ var _phase_label: Label
 var _timer_label: Label
 var _seed_label: Label
 var _hp_bar: ProgressBar
+var _fitness_bar: ProgressBar
 var _stam_bar: ProgressBar
+var _grapple_bar: ProgressBar
 var _hunger_bar: ProgressBar
 var _thirst_bar: ProgressBar
+var _telemetry_panel: PanelContainer
+var _telemetry_label: Label
 var _hotbar_label: Label
 var _inv_label: Label
 var _prompt_label: Label
@@ -97,6 +101,10 @@ func _register_inputs() -> void:
 		"kick": [KEY_Q],
 		"interact": [KEY_E],
 		"survivor_sense": [KEY_V],
+		"grapple": [KEY_X],
+		"lookback": [KEY_B],
+		"debug_telemetry": [KEY_F3],
+		"dump_telemetry": [KEY_F4],
 		"flashlight": [KEY_F],
 		"slot_1": [KEY_1],
 		"slot_2": [KEY_2],
@@ -124,6 +132,11 @@ func _register_inputs() -> void:
 			var ev := InputEventMouseButton.new()
 			ev.button_index = mouse_map[action]
 			InputMap.action_add_event(action, ev)
+
+	var mmb := InputEventMouseButton.new()
+	mmb.button_index = MOUSE_BUTTON_MIDDLE
+	if InputMap.has_action("grapple"):
+		InputMap.action_add_event("grapple", mmb)
 
 
 func _set_mouse_captured(captured: bool) -> void:
@@ -161,6 +174,11 @@ func _unhandled_input(event: InputEvent) -> void:
 		get_tree().reload_current_scene()
 	elif Input.is_action_just_pressed("skip_phase") and not game_over and not victory and not paused:
 		phase_timer = 0.05
+	elif Input.is_action_just_pressed("debug_telemetry") and _telemetry_panel != null:
+		_telemetry_panel.visible = not _telemetry_panel.visible
+	elif Input.is_action_just_pressed("dump_telemetry") and is_instance_valid(_player):
+		if _player.telemetry.dump_json("user://dl_telemetry.json"):
+			_push_log("Saved telemetry trace to user://dl_telemetry.json")
 
 
 func _process(delta: float) -> void:
@@ -391,6 +409,30 @@ func _build_island() -> void:
 	_make_box(Vector3(18.6, 0.65, -7.8), Vector3(2.2, 1.3, 2.2), Color(0.74, 0.68, 0.60), true, "wood") # 1.3m step
 	_make_box(Vector3(18.6, 1.25, -4.5), Vector3(2.2, 2.5, 2.6), Color(0.68, 0.72, 0.76), true, "metal") # 2.5m step to 3.85m roof
 	_spawn_container(Vector3(24.0, 3.85, -4.5), "supply")
+
+	# Parkour Calibration Zone (additive, keeps verify_prototype coordinates untouched):
+	# 1. Low Slide Tunnel (1.35m overhead clearance) at (4.5, 0, 2.0)
+	_make_box(Vector3(3.2, 1.1, 2.0), Vector3(0.5, 2.2, 3.2), Color(0.68, 0.66, 0.62), true, "concrete")
+	_make_box(Vector3(5.8, 1.1, 2.0), Vector3(0.5, 2.2, 3.2), Color(0.68, 0.66, 0.62), true, "concrete")
+	_make_box(Vector3(4.5, 1.775, 2.0), Vector3(3.1, 0.85, 3.2), Color(0.75, 0.52, 0.36), true, "wood")
+
+	# 2. 0.42m Step-Up Staircase at (-2.5, 0, -3.5)
+	for si in 4:
+		var step_h := 0.42 * float(si + 1)
+		_make_box(Vector3(-2.5, step_h * 0.5, -3.5 - float(si) * 0.9), Vector3(2.2, step_h, 0.9), Color(0.72, 0.74, 0.76), true, "concrete")
+
+	# 3. Vertical Wall-Run & Shimmy Tower (3.9m wall + 6m wide grab ledge + opposite 3.6m rooftop) at (-15.3, 0, -24.0)
+	_make_box(Vector3(-15.3, 1.95, -24.0), Vector3(6.0, 3.9, 1.6), Color(0.62, 0.66, 0.72), true, "concrete")
+	_make_box(Vector3(-15.3, 1.8, -19.2), Vector3(4.8, 3.6, 2.4), Color(0.58, 0.68, 0.74), true, "metal")
+
+	# 4. 7.2m High Drop Tower & Grapple Anchor at (12.0, 0, -14.0)
+	_make_box(Vector3(12.0, 3.6, -14.0), Vector3(3.6, 7.2, 3.6), Color(0.54, 0.58, 0.64), true, "metal")
+	_make_box(Vector3(12.0, 7.5, -14.0), Vector3(1.2, 0.6, 1.2), Color(0.95, 0.62, 0.22), true, "metal")
+
+	# 5. Soft Amortizer Landing Pads
+	for amp_pos in [Vector3(-8.5, 0.18, -14.8), Vector3(18.6, 0.18, 4.0), Vector3(12.0, 0.18, -10.0)]:
+		var pad := _make_box(amp_pos, Vector3(3.2, 0.36, 2.6), Color(0.24, 0.62, 0.78), true, "wood")
+		pad.add_to_group("amortizer")
 	_make_box(Vector3(35.5, 1.75, 0.0), Vector3(1.0, 3.5, 20.0), Color(0.65, 0.66, 0.68), true, "concrete") # Back
 	_make_box(Vector3(28.0, 1.75, -9.5), Vector3(16.0, 3.5, 1.0), Color(0.65, 0.66, 0.68), true, "concrete") # North
 	_make_box(Vector3(28.0, 1.75, 9.5), Vector3(16.0, 3.5, 1.0), Color(0.65, 0.66, 0.68), true, "concrete") # South
@@ -588,7 +630,7 @@ func _build_hud() -> void:
 	right_panel.add_child(right_box)
 
 	var help := Label.new()
-	help.text = "WASD Move | Shift Sprint | Space Jump/Vault | Alt+WASD Dodge | Ctrl Slide\nLMB Swing (Hold=Heavy) / Build / Repair | RMB Upgrade | Q Kick/Dropkick\nE Loot | V Survivor Sense | F Flashlight | H Heal | G Eat/Drink | T Skip"
+	help.text = "WASD Move | Shift Sprint | Space Jump/Vault | Alt+WASD Dodge | Ctrl Slide/Roll\nLMB Swing (Hold=Heavy/Air=Slam) | RMB Upgrade | Q Kick/Stomp | X/MMB Grapple | B Lookback\nE Loot | V Sense | F Light | H Heal | G Eat | T Skip | F3 Telemetry | F4 Dump"
 	help.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	help.modulate = Color(0.85, 0.88, 0.92, 0.92)
 	help.add_theme_font_size_override("font_size", 12)
@@ -625,7 +667,7 @@ func _build_hud() -> void:
 	var bars_panel := _make_hud_panel(0.74)
 	bars_panel.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
 	bars_panel.offset_left = 14
-	bars_panel.offset_top = -142
+	bars_panel.offset_top = -184
 	bars_panel.offset_right = 264
 	bars_panel.offset_bottom = -14
 	hud.add_child(bars_panel)
@@ -634,9 +676,24 @@ func _build_hud() -> void:
 	bars_panel.add_child(bars)
 
 	_hp_bar = _add_stat_bar(bars, "HP", Color(0.88, 0.24, 0.24))
-	_stam_bar = _add_stat_bar(bars, "Stamina", Color(0.28, 0.80, 0.45))
+	_fitness_bar = _add_stat_bar(bars, "Fitness", Color(0.92, 0.80, 0.24))
+	_stam_bar = _add_stat_bar(bars, "Combat", Color(0.28, 0.80, 0.45))
+	_grapple_bar = _add_stat_bar(bars, "Grapple", Color(0.70, 0.52, 0.95))
 	_hunger_bar = _add_stat_bar(bars, "Hunger", Color(0.88, 0.58, 0.20))
 	_thirst_bar = _add_stat_bar(bars, "Thirst", Color(0.22, 0.65, 0.92))
+
+	# F3 Live DL1 Movement & Parity Telemetry Panel (top-left under phase bar)
+	_telemetry_panel = _make_hud_panel(0.84)
+	_telemetry_panel.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	_telemetry_panel.offset_left = 14
+	_telemetry_panel.offset_top = 62
+	_telemetry_panel.visible = false
+	hud.add_child(_telemetry_panel)
+
+	_telemetry_label = Label.new()
+	_telemetry_label.add_theme_font_size_override("font_size", 12)
+	_telemetry_label.modulate = Color(0.82, 0.96, 0.88)
+	_telemetry_panel.add_child(_telemetry_label)
 
 	# Bottom-center hotbar & inventory
 	var bot_panel := _make_hud_panel(0.74)
@@ -824,10 +881,16 @@ func _update_hud() -> void:
 	_timer_label.text = "Next phase: %ds" % int(ceil(phase_timer)) + (" | Incoming: %d" % horde_to_spawn if is_night else "")
 
 	_hp_bar.value = s["hp"]
+	_fitness_bar.value = float(s.get("fitness", 1.0)) * 100.0
+	_fitness_bar.modulate = Color(0.95, 0.38, 0.22) if bool(s.get("sprint_exhausted", false)) else Color(0.92, 0.80, 0.24)
 	_stam_bar.value = float(s["stamina"]) * 100.0
 	_stam_bar.modulate = Color(0.9, 0.35, 0.2) if s["exhausted"] else Color(0.28, 0.80, 0.45)
+	_grapple_bar.value = float(s.get("rope_energy", 1.0)) * 100.0
 	_hunger_bar.value = s["hunger"]
 	_thirst_bar.value = s["thirst"]
+
+	if _telemetry_panel != null and _telemetry_panel.visible and _telemetry_label != null:
+		_telemetry_label.text = _player.telemetry.format_overlay_text()
 
 	var slot := int(s["active_slot"])
 	var w_name: String = s["weapon_name"]

@@ -10,12 +10,14 @@ signal died(zombie: Zombie)
 var hp: float = 65.0
 var max_hp: float = 65.0
 var stagger_timer: float = 0.0
+var downed_timer: float = 0.0
 var knockback_vel: Vector3 = Vector3.ZERO
 var is_night_ref: bool = false
 
 var _spawn_pos: Vector3
 var _attack_timer: float = 0.0
 var _attack_anim_timer: float = 0.0
+var _grab_cd: float = 2.0
 var _wander_timer: float = 0.0
 var _wander_dir: Vector3 = Vector3.ZERO
 var _flash_timer: float = 0.0
@@ -25,6 +27,9 @@ var _lunge_dir: Vector3 = Vector3.ZERO
 var _is_dying: bool = false
 var _death_timer: float = 0.0
 var _hit_freeze_timer: float = 0.0
+
+var _col_shape: CollisionShape3D
+var _cap_shape: CapsuleShape3D
 
 var _dl_rig: Node3D
 var _anim_player: AnimationPlayer
@@ -73,13 +78,13 @@ func set_night_state(is_night: bool) -> void:
 func _build_visuals() -> void:
 	var scale_mul := 1.28 if is_brute else 1.0
 
-	var col := CollisionShape3D.new()
-	var cap := CapsuleShape3D.new()
-	cap.radius = 0.38 * scale_mul
-	cap.height = 1.75 * scale_mul
-	col.shape = cap
-	col.position = Vector3(0.0, 0.88 * scale_mul, 0.0)
-	add_child(col)
+	_col_shape = CollisionShape3D.new()
+	_cap_shape = CapsuleShape3D.new()
+	_cap_shape.radius = 0.38 * scale_mul
+	_cap_shape.height = 1.75 * scale_mul
+	_col_shape.shape = _cap_shape
+	_col_shape.position = Vector3(0.0, 0.88 * scale_mul, 0.0)
+	add_child(_col_shape)
 
 	var dl_key := "dl_zombie_goon" if is_brute else ("dl_zombie_volatile" if (is_bunker_enemy or is_night_runner) else "dl_zombie_biter")
 	_dl_rig = RefAssets.instantiate_dl_zombie(dl_key)
@@ -164,6 +169,50 @@ func set_sense_highlight(active: bool) -> void:
 		_sense_label.visible = show
 
 
+func is_downed() -> bool:
+	return downed_timer > 0.0 and not _is_dying
+
+
+func is_headshot_pos(world_pos: Vector3) -> bool:
+	var scale_mul := 1.28 if is_brute else 1.0
+	return world_pos.y >= global_position.y + 1.32 * scale_mul
+
+
+func apply_knockdown(duration: float) -> void:
+	if _is_dying:
+		return
+	downed_timer = maxf(downed_timer, duration)
+	stagger_timer = maxf(stagger_timer, duration)
+	_lunge_timer = 0.0
+	_update_downed_capsule(true)
+	_play_anim("knockdown")
+
+
+func on_grab_broken(stun_dur: float) -> void:
+	_grab_cd = 8.0
+	_attack_timer = 1.6
+	stagger_timer = maxf(stagger_timer, stun_dur)
+	var player := get_tree().get_first_node_in_group("player") as Node3D
+	if player != null and is_instance_valid(player):
+		var away := global_position - player.global_position
+		away.y = 0.0
+		if away.length() > 0.05:
+			knockback_vel = away.normalized() * 8.5
+	_play_anim("stagger")
+
+
+func _update_downed_capsule(downed: bool) -> void:
+	if _cap_shape == null or _col_shape == null:
+		return
+	var scale_mul := 1.28 if is_brute else 1.0
+	if downed:
+		_cap_shape.height = 0.78 * scale_mul
+		_col_shape.position.y = 0.39 * scale_mul
+	else:
+		_cap_shape.height = 1.75 * scale_mul
+		_col_shape.position.y = 0.88 * scale_mul
+
+
 func apply_stun(duration: float) -> void:
 	stagger_timer = maxf(stagger_timer, duration)
 	_lunge_timer = 0.0
@@ -234,7 +283,7 @@ func _physics_process(delta: float) -> void:
 		return
 
 	if not is_on_floor():
-		velocity.y -= 18.0 * delta
+		velocity.y -= DLReference.GRAVITY * delta
 	else:
 		velocity.y = 0.0
 
@@ -245,8 +294,14 @@ func _physics_process(delta: float) -> void:
 
 	_attack_timer = maxf(0.0, _attack_timer - delta)
 	_attack_anim_timer = maxf(0.0, _attack_anim_timer - delta)
+	_grab_cd = maxf(0.0, _grab_cd - delta)
 	_lunge_cd = maxf(0.0, _lunge_cd - delta)
 	knockback_vel = knockback_vel.move_toward(Vector3.ZERO, 24.0 * delta)
+
+	if downed_timer > 0.0:
+		downed_timer = maxf(0.0, downed_timer - delta)
+		if downed_timer <= 0.0:
+			_update_downed_capsule(false)
 
 	if stagger_timer > 0.0:
 		stagger_timer -= delta
@@ -254,7 +309,7 @@ func _physics_process(delta: float) -> void:
 		velocity.x = knockback_vel.x
 		velocity.z = knockback_vel.z
 		move_and_slide()
-		_play_anim("knockdown" if stagger_timer > 1.3 else "stagger")
+		_play_anim("knockdown" if (downed_timer > 0.0 or stagger_timer > 1.3) else "stagger")
 		return
 
 	var active := is_active_state(is_night_ref)
@@ -309,7 +364,15 @@ func _physics_process(delta: float) -> void:
 	velocity.z = desired_dir.z * move_speed + knockback_vel.z
 	move_and_slide()
 
-	# Attack blocking Structure or Player
+	# Grab or Attack blocking Structure or Player
+	if active and not is_brute and _grab_cd <= 0.0 and player != null and target_dist <= 1.25 and absf(player.global_position.y - global_position.y) < 1.4:
+		if player.has_method("can_be_grabbed") and player.can_be_grabbed():
+			_grab_cd = 8.0
+			_attack_timer = 2.0
+			player.start_zombie_grab(self)
+			_play_anim("attack_swipe")
+			return
+
 	if _attack_timer <= 0.0:
 		var hit_structure := _find_blocking_structure()
 		if hit_structure != null:
@@ -364,6 +427,7 @@ func apply_hit(damage: float, knockback: Vector3, stagger: float = 0.35) -> bool
 	_refresh_sunlight_visuals()
 	if hp <= 0.0:
 		_is_dying = true
+		downed_timer = 0.0
 		_death_timer = 4.0
 		_play_anim("death")
 		set_sense_highlight(false)

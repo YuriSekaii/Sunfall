@@ -38,42 +38,49 @@ Open the **Pause Menu (`Esc`)** and click **Check for Updates** (`scripts/autolo
 
 | Action | Input | Details |
 | :--- | :--- | :--- |
-| **Move** | `W`, `A`, `S`, `D` | Walk (`3.5 m/s`), strafe/backpedal (`2.5 m/s`) |
-| **Look** | `Mouse` | First-person look; click window to capture cursor, `Esc` to unlock/pause |
-| **Sprint** | `Shift` (hold + `W`) | `6.0 m/s`, drains `0.10` stamina/s, `+4.5°` FOV |
-| **Jump / Vault / Wall-Jump** | `Space` | Jump (`5.6 m/s`), ledge vault/mantle, zombie vault (while sprinting), or wall-jump during Tic-Tac wall-run |
-| **Crouch / Slide / Landing Roll** | `Ctrl` or `C` | Crouch (`1.5 m/s`), crouch-slide while sprinting (`8.4 m/s`), or parkour landing roll within `1.0s` of impact |
-| **Quick Dodge / Sidestep** | `Alt` + `A` / `D` / `S` | `0.22s` burst at `12.5 m/s` (`0.20` stamina, `0.55s` cd) |
-| **Melee Swing / Build / Repair** | `Left Mouse Button` | Slot 1: tap for L/R combo (`0.60s`), hold `>= 0.35s` for Heavy Power Swing; Slot 2/3: repair or place structure |
+| **Move** | `W`, `A`, `S`, `D` | Walk (`3.5 m/s`), strafe/backpedal (`2.5 m/s`), `0.51m` stair step-up |
+| **Look / Lookback** | `Mouse` / `B` (hold) | First-person look; hold `B` to glance `180°` behind while sprinting |
+| **Sprint / Tackle** | `Shift` (`+E` or `+RMB`) | `6.0 m/s` (`+4.5°` FOV, `0.10` fitness/s); `Shift+E`/`Shift+RMB` tackles (`+6.0 m/s`) |
+| **Jump / Vault / Hang** | `Space` | Jump (`5.825 m/s`), low vault, high mantle, ledge hang (`A/D` shimmy, `180°` jump-off), zombie vault, or wall-jump |
+| **Crouch / Slide / Roll** | `Ctrl` or `C` | Crouch (`1.5 m/s`, `1.05m` capsule), slide (`8.6→3.0 m/s`, knocks down), or `360°` landing roll (`1.0s` window) |
+| **Quick Dodge / Sidestep** | `Alt` or `Space` + `A/D/S` | `0.24s` burst at `9.0 m/s` (`0.20` combat stamina, `0.75s` cd) |
+| **Melee / Slam / Build** | `Left Mouse Button` | Tap for 5-ray combo (`0.60s`), hold `>= 0.50s` for Heavy Swing, airborne looking down/crouched for Ground Pound; Slot 2/3 builds/repairs |
 | **Upgrade Wall** | `Right Mouse Button` | Upgrades targeted Wood Wall to Reinforced Metal (`2 Metal`) |
-| **Kick / Dropkick** | `Q` | Grounded kick (`0.625s` cycle, `0` stamina); mid-air + `W` triggers Dropkick (`0.35` stamina, `2.0×` knockback) |
-| **Loot / Search** | `E` (hold) | Searches targeted container (`0.60s`–`0.95s`) |
+| **Kick / Dropkick / Stomp** | `Q` (or `E` on downed) | Grounded kick (`0` stam), Air Kick (`0.30` stam), forward Dropkick (`0.50` stam, `40` dmg + knockdown), or Head Stomp (`120` dmg) |
+| **Grappling Hook** | `X` or `MMB` | `25m` range, `0.5` rope energy (`1.0` max, `10s` regen), zips `20 m/s` + auto-mantle |
+| **Loot / Break Grab** | `E` (hold / mash) | Searches targeted container (`0.60s`–`0.95s`); mash `Space/E/A/D` to break zombie grab |
 | **Survivor Sense** | `V` | `3.5s` sonar pulse (`6.0s` cd) highlighting unlooted crates (gold) & infected within `45m` (red) through walls |
 | **Hotbar Slots** | `1`, `2`, `3` | `1` Melee Weapon, `2` Wood Wall, `3` Auto-Turret |
 | **Flashlight** | `F` | Toggles head-mounted `SpotLight3D` (`24m` range) |
 | **Use Medkit** | `H` | Consumes 1 Medkit (`+50 HP`) |
 | **Eat / Drink** | `G` | Consumes Water (`+45 Thirst`) or Food (`+45 Hunger`), prioritizing lowest need |
 | **Skip Phase** | `T` | Advances current day/night timer to `0.05s` (testing shortcut) |
+| **Telemetry / Trace Dump** | `F3` / `F4` | `F3` toggles live DL1 parity scorecard; `F4` writes `user://dl_telemetry.json` |
 | **Pause / Restart** | `Esc` / `R` | `Esc` toggles pause + updater menu; `R` restarts on death/victory |
 
 ---
 
 ## 🏃 Core Mechanic Systems
 
-### 1. Dying Light 1 Movement & Parkour (`scripts/player.gd`)
-* **Base Kinematics**: Walk `3.5 m/s`, Back/Strafe `2.5 m/s`, Sprint `6.0 m/s`, Crouch `1.5 m/s`, Gravity `18.0 m/s²`, Air Control `0.22`, Jump `5.6 m/s` (`0.4s` cooldown).
-* **Tic-Tac Wall-Run & Wall-Jump**: Running/jumping alongside a vertical surface engages up to `1.1s` wall-run (`WALL_RUN_EXTRA_GRAVITY = 9.5`, `±11°` camera roll, wall-footstep SFX). Pressing `Space` kicks upward & away (`WALL_JUMP_BACK_HEIGHT = 0.8`, up to `MAX_WALL_JUMPS = 2` chained jumps before touching ground).
-* **Low Vault vs. High Ledge Mantle**:
-  * **Low Vault (`0.45m`–`1.25m`)**: `0.20s` traversal preserving sprint momentum (`vault` animation).
-  * **High Ledge Mantle (`1.25m`–`2.45m`)**: `0.34s` pull-up with camera dip (`climb_ledge` animation).
-* **Fall Damage & Parkour Landing Roll**: Falls `> 4.8m` deal `clamp((fall_dist - 4.8) * 14.0, 8.0, 95.0)` HP unless `Ctrl`/`C` is pressed/held within `CROUCH_DAMPING_WINDOW_TIME = 1.0s` before impact, which triggers a `0.48s` `360°` forward roll (`7.8 m/s`, `0` fall damage).
-* **Crouch-Slide & Vault-Over-Zombie**: Sliding (`0.50s` at `8.4 m/s`) knocks back infected (`6.0` dmg, `8.0` impulse, `0.7s` stagger). Sprinting + `Space` within `1.85m` of a zombie vaults overhead and stuns it for `2.5s`.
-* **Survival Needs**: Max HP `100` (slow passive regen up to `25 HP` after `4.0s`); Stamina `1.0` (exhausted until `0.33`, regenerates at `0.45/s` or `0.22/s` when starving/dehydrated); Hunger `-0.16/s`, Thirst `-0.22/s` (`0` causes `-20%` speed and `-0.35 HP/s` down to `1 HP`).
+### 1. Dying Light 1 Movement & Parkour (`scripts/player.gd`, `scripts/dl_reference.gd`)
+* **Base Kinematics (`Data0.pak`)**: Gravity `16.80 m/s²`, Jump `5.825 m/s` (`1.01m` apex, `0.40s` interval, `0.12s` coyote time, `0.15s` jump buffer), Walk `3.5 m/s`, Back/Strafe `2.5 m/s`, Sprint `6.0 m/s`, Crouch `1.5 m/s`, `50°` max slope, `0.51m` stair step-up, linear `move_toward` accel/decel (`40.0` ground, `10.0` sprint, `4.0/10.0` crouch, `0.22` air control).
+* **Real Crouch Capsule**: Standing `1.75m` (eye `1.56m`) ↔ crouched/sliding `1.05m` (eye `0.90m`) with overhead ray clearance check before standing.
+* **Ledge Grab, Hang, Shimmy & Wall-Run**:
+  * **Low Vault (`0.45m`–`1.25m`)**: `0.26s` traversal (vaults over thin obstacles `<= 1.0m` or on top, exiting at `6.4 m/s`).
+  * **High Mantle (`1.25m`–`2.35m`)**: `0.46s` pull-up with camera dip.
+  * **Ledge Hang (`2.35m`–`3.30m`)**: Free `±180°` look, `A/D` shimmy (`1.6 m/s`), `W/Space` climb up, look away + `Space` for `180°` jump-off, `Ctrl/C/S` drop.
+  * **Vertical Front Wall-Run & Lateral Tic-Tac**: Holding `W+Space` straight into a wall climbs `+1.8m` (`wall_run_up`), enabling `~4.3m` ledge grabs; lateral Tic-Tac runs up to `1.1s` (`WALL_RUN_EXTRA_GRAVITY = 9.5`, `±11°` roll, up to `2` wall-jumps).
+* **Fall Damage, Landing Roll & Amortizers**: `< 3.5m` `0` dmg; `3.5m–6.5m` `0.22s` recovery; `6.5m–9.0m` fall damage unless `Ctrl/C` pressed/held within `1.0s` → `360°` Landing Roll (`0` dmg, `7.8 m/s`); `> 9.0m` severe/lethal unless landing on an `amortizer` pad (`0` dmg, `-3.0°` FOV).
+* **Dual Stamina & Survival**:
+  * **Fitness**: Drains `0.10/s` sprinting and `0.10` per jump (`0.75s` delay / `5.0s` on empty, `2.0/s` regen, `0.6×` speed when exhausted until `>= 0.33`).
+  * **Combat Stamina**: `2.5s` delay / `4.0s` on empty, `1.5/s` regen, `0.6×` cost on miss; exhausted swings remain usable (`0.95s` cycle, `0.65×` dmg).
+  * **Needs**: Max HP `100` (slow regen up to `25 HP`); Hunger `-0.16/s`, Thirst `-0.22/s` (`0` causes `-20%` speed and `-0.35 HP/s` down to `1 HP`).
 
 ### 2. Melee Combat & Weapons (`scripts/player.gd`, `scripts/loot_table.gd`)
-* **Alternating Combo & Apex Timing**: Light swings alternate left/right (`0.60s` cycle, `±6°` camera roll) and connect at the swing apex (`0.16s` light, `0.22s` heavy), triggering a `0.045s` local hit-pause on both FPP rig and target zombie plus particle bursts.
-* **Charged Heavy Swing**: Holding `LMB >= 0.35s` and releasing deals `1.8×` damage, `13.5` knockback, `0.95s` stagger (`1.5×` stamina cost).
-* **Kick & Dropkick**: Grounded `Q` (`0.625s` cycle, `0.25s` hit beat, `0` stamina) deals `8.0` dmg, `11.5` knockback, `1.1s` stagger. Mid-air forward `Q` Dropkick (`0.35` stamina) deals `18.0` dmg, `23.0` knockback, `1.6s` stagger, with `0.28s` landing recovery.
+* **Swept 5-Ray Combo, Headshots & Apex Timing**: Light swings alternate left/right (`0.60s` cycle, `±6°` roll) with a 5-ray arc, `2.0×` Headshot Crits (`z.is_headshot_pos`), and apex hit timing (`0.16s` fast / `0.22s` heavy) with `0.045s` hit-pause + particle bursts.
+* **Charged Heavy, Tackle & Ground Pound**: Hold `LMB >= 0.50s` for Heavy Swing (`1.75×` dmg, `+0.15m` reach). `Shift+E`/`Shift+RMB` tackles (`+6.0 m/s`, `0.40` stam, `1.0s` cd, knockdown). Airborne `LMB` looking down (`pitch < -0.35`) or `Ctrl+LMB` triggers Ground Pound (`-16 m/s`, `3.0m` shockwave knockdown, `32` dmg).
+* **Kick, Dropkick & Head Stomp**: Grounded `Q` (`0.625s`/`0.25s`, `0` stam, `8` dmg), Air Kick (`0.30` stam), Dropkick (`0.50` stam, `40` dmg, `23.0` knockback + `2.5s` knockdown), and Head Stomp (`E`/`Q` near downed zombie, `120` dmg).
+* **Zombie Grab & Fast Break**: Active non-biters within `1.25m` (`8s` cd) can grab the player; mash `Space/E/A/D` (`3` taps) to shove free and stun the zombie for `3.0s`.
 
 | Tier | Weapon | Damage | Reach | Stamina Cost |
 | :---: | :--- | :---: | :---: | :---: |
