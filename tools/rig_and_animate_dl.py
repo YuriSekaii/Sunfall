@@ -342,23 +342,52 @@ def make_mat(name: str, color: tuple[float, float, float], roughness: float = 0.
     return mat
 
 
-def add_limb_capsule(bm_objs: list[bpy.types.Object], p0: tuple[float, float, float], p1: tuple[float, float, float], r: float, mat: bpy.types.Material) -> None:
+def add_limb_capsule(
+    bm_objs: list[bpy.types.Object],
+    p0: tuple[float, float, float],
+    p1: tuple[float, float, float],
+    r0: float,
+    mat: bpy.types.Material,
+    r1: float | None = None,
+) -> None:
     v0, v1 = Vector(p0), Vector(p1)
     diff = v1 - v0
     length = diff.length
     mid = (v0 + v1) * 0.5
-    bpy.ops.mesh.primitive_cylinder_add(vertices=12, radius=r, depth=length, location=mid)
+    rad2 = r0 if r1 is None else r1
+    bpy.ops.mesh.primitive_cone_add(vertices=14, radius1=r0, radius2=rad2, depth=length, location=mid)
     ob = bpy.context.active_object
     ob.rotation_mode = "QUATERNION"
     ob.rotation_quaternion = diff.normalized().to_track_quat("Z", "Y")
     bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
+    for poly in ob.data.polygons:
+        poly.use_smooth = True
+    ob.data.materials.append(mat)
+    bm_objs.append(ob)
+
+
+def add_rounded_box(
+    bm_objs: list[bpy.types.Object],
+    loc: tuple[float, float, float],
+    scale: tuple[float, float, float],
+    mat: bpy.types.Material,
+    rot_deg: tuple[float, float, float] = (0.0, 0.0, 0.0),
+) -> None:
+    bpy.ops.mesh.primitive_cube_add(size=1.0, location=loc)
+    ob = bpy.context.active_object
+    ob.scale = scale
+    ob.rotation_euler = tuple(math.radians(a) for a in rot_deg)
+    bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
+    for poly in ob.data.polygons:
+        poly.use_smooth = True
     ob.data.materials.append(mat)
     bm_objs.append(ob)
 
 
 def build_fpp_player() -> tuple[bpy.types.Object, bpy.types.Object]:
-    """Generate clean textured FPP survivor body (no head/neck; arms in forward combat guard + legs/boots)."""
-    mat_jacket = make_mat("SurvivorJacket", (0.20, 0.23, 0.18), 0.85)
+    """Generate clean textured FPP survivor body (no head/neck; grounded FPP arm/weapon framing + legs/boots)."""
+    mat_jacket = make_mat("SurvivorJacket", (0.21, 0.24, 0.19), 0.84)
+    mat_cuff = make_mat("SurvivorCuff", (0.15, 0.16, 0.14), 0.86)
     mat_skin = make_mat("SurvivorSkin", (0.64, 0.46, 0.36), 0.68)
     mat_glove = make_mat("SurvivorGlove", (0.12, 0.12, 0.13), 0.72)
     mat_jeans = make_mat("SurvivorJeans", (0.14, 0.17, 0.23), 0.88)
@@ -366,39 +395,37 @@ def build_fpp_player() -> tuple[bpy.types.Object, bpy.types.Object]:
 
     parts: list[bpy.types.Object] = []
 
-    # Torso shifted slightly back (-0.06 Y) so camera at (0, 0, 1.56) sees legs/chest cleanly without clipping
-    # Waist/Hips
-    add_limb_capsule(parts, (0.0, -0.06, 0.88), (0.0, -0.06, 1.12), 0.145, mat_jacket)
-    # Chest (stops at Z=1.40, NO head/neck!)
-    add_limb_capsule(parts, (0.0, -0.06, 1.10), (0.0, -0.06, 1.40), 0.165, mat_jacket)
+    # Torso shifted slightly back (-0.07 Y) so camera at (0, 0, 1.56) sees legs/chest cleanly without clipping
+    add_limb_capsule(parts, (0.0, -0.07, 0.88), (0.0, -0.07, 1.12), 0.142, mat_jacket, 0.150)
+    add_limb_capsule(parts, (0.0, -0.07, 1.10), (0.0, -0.07, 1.39), 0.155, mat_jacket, 0.165)
+    add_rounded_box(parts, (0.0, -0.07, 0.91), (0.30, 0.24, 0.06), mat_boot)  # tactical belt
 
-    # Legs + Boots (Z=0.0..0.90)
+    # Legs + articulated Boots (Z=0.0..0.90)
     for side_x in (-0.105, 0.105):
-        add_limb_capsule(parts, (side_x, -0.05, 0.90), (side_x, -0.02, 0.48), 0.082, mat_jeans)
-        add_limb_capsule(parts, (side_x, -0.02, 0.48), (side_x, -0.04, 0.10), 0.066, mat_jeans)
-        # Boot shaft + toe
-        bpy.ops.mesh.primitive_cube_add(size=1.0, location=(side_x, 0.02, 0.055))
-        boot = bpy.context.active_object
-        boot.scale = (0.105, 0.22, 0.11)
-        bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
-        boot.data.materials.append(mat_boot)
-        parts.append(boot)
+        add_limb_capsule(parts, (side_x, -0.06, 0.90), (side_x, -0.02, 0.48), 0.085, mat_jeans, 0.068)
+        add_limb_capsule(parts, (side_x, -0.02, 0.48), (side_x, -0.04, 0.10), 0.068, mat_jeans, 0.055)
+        add_limb_capsule(parts, (side_x, -0.04, 0.16), (side_x, -0.03, 0.04), 0.060, mat_boot, 0.058)
+        add_rounded_box(parts, (side_x, 0.04, 0.05), (0.105, 0.22, 0.09), mat_boot)
 
-    # Arms in FPP combat guard (Hand.R at (+0.20, +0.39, 1.28), Hand.L at (-0.23, +0.34, 1.24))
+    # Arms framed naturally inside Camera3D FOV 72deg at (0, 0, 1.56):
+    # Hand.R at (+0.21, +0.44, 1.36) -> Godot (+0.21 right, -0.20 down, -0.44 forward)
+    # Hand.L at (-0.23, +0.42, 1.34) -> Godot (-0.23 left, -0.22 down, -0.42 forward)
     arm_pose = {
-        "L": ((-0.18, -0.04, 1.36), (-0.25, 0.14, 1.15), (-0.23, 0.34, 1.24), (-0.21, 0.43, 1.27)),
-        "R": ((0.18, -0.04, 1.36), (0.24, 0.16, 1.16), (0.20, 0.39, 1.28), (0.19, 0.48, 1.31)),
+        "L": ((-0.18, -0.06, 1.36), (-0.27, 0.16, 1.15), (-0.23, 0.42, 1.34), (-0.20, 0.51, 1.37)),
+        "R": ((0.18, -0.06, 1.36), (0.26, 0.17, 1.15), (0.21, 0.44, 1.36), (0.19, 0.53, 1.39)),
     }
     for side, (sh, el, wr, fg) in arm_pose.items():
-        add_limb_capsule(parts, sh, el, 0.056, mat_jacket)
-        add_limb_capsule(parts, el, wr, 0.043, mat_skin)
-        # Gloved hand + curled fingers gripping weapon
-        bpy.ops.mesh.primitive_cube_add(size=1.0, location=((wr[0] + fg[0]) * 0.5, (wr[1] + fg[1]) * 0.5, (wr[2] + fg[2]) * 0.5))
-        palm = bpy.context.active_object
-        palm.scale = (0.062, 0.10, 0.072)
-        bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
-        palm.data.materials.append(mat_glove)
-        parts.append(palm)
+        add_limb_capsule(parts, sh, el, 0.058, mat_jacket, 0.048)
+        add_limb_capsule(parts, el, wr, 0.045, mat_skin, 0.034)
+        # Rolled sleeve cuff near elbow + wrist wrap
+        cuff_p0 = tuple(el[i] + (wr[i] - el[i]) * 0.12 for i in range(3))
+        add_limb_capsule(parts, el, cuff_p0, 0.050, mat_cuff, 0.048)
+        # Gloved palm + thumb + curled finger grip
+        palm_loc = tuple((wr[i] + fg[i]) * 0.5 for i in range(3))
+        add_rounded_box(parts, palm_loc, (0.058, 0.095, 0.068), mat_glove)
+        sgn = -1.0 if side == "L" else 1.0
+        add_rounded_box(parts, (palm_loc[0] - sgn * 0.032, palm_loc[1] + 0.015, palm_loc[2] + 0.024), (0.026, 0.055, 0.026), mat_glove)
+        add_rounded_box(parts, (fg[0], fg[1] + 0.01, fg[2] - 0.01), (0.052, 0.036, 0.048), mat_skin)
 
     # Join all parts into one clean FPP mesh
     bpy.ops.object.select_all(action="DESELECT")
@@ -411,28 +438,28 @@ def build_fpp_player() -> tuple[bpy.types.Object, bpy.types.Object]:
 
     sh_l, el_l, wr_l, fg_l = arm_pose["L"]
     sh_r, el_r, wr_r, fg_r = arm_pose["R"]
-    ws_head = (wr_r[0] + 0.0, (wr_r[1] + fg_r[1]) * 0.5 + 0.01, (wr_r[2] + fg_r[2]) * 0.5)
-    ws_tail = (ws_head[0], ws_head[1] + 0.06, ws_head[2] + 0.16)
+    ws_head = (wr_r[0] - 0.01, (wr_r[1] + fg_r[1]) * 0.5 + 0.01, (wr_r[2] + fg_r[2]) * 0.5)
+    ws_tail = (ws_head[0] - 0.025, ws_head[1] + 0.065, ws_head[2] + 0.165)
 
     bones = [
-        ("Hips", (0.0, -0.06, 0.88), (0.0, -0.06, 1.02), None),
-        ("Spine", (0.0, -0.06, 1.02), (0.0, -0.06, 1.20), "Hips"),
-        ("Chest", (0.0, -0.06, 1.20), (0.0, -0.06, 1.40), "Spine"),
-        ("Neck", (0.0, -0.06, 1.40), (0.0, -0.06, 1.46), "Chest"),
-        ("Head", (0.0, -0.06, 1.46), (0.0, -0.06, 1.56), "Neck"),
-        ("Clavicle.L", (-0.05, -0.05, 1.38), sh_l, "Chest"),
+        ("Hips", (0.0, -0.07, 0.88), (0.0, -0.07, 1.02), None),
+        ("Spine", (0.0, -0.07, 1.02), (0.0, -0.07, 1.20), "Hips"),
+        ("Chest", (0.0, -0.07, 1.20), (0.0, -0.07, 1.39), "Spine"),
+        ("Neck", (0.0, -0.07, 1.39), (0.0, -0.07, 1.46), "Chest"),
+        ("Head", (0.0, -0.07, 1.46), (0.0, -0.07, 1.56), "Neck"),
+        ("Clavicle.L", (-0.05, -0.06, 1.37), sh_l, "Chest"),
         ("UpperArm.L", sh_l, el_l, "Clavicle.L"),
         ("Forearm.L", el_l, wr_l, "UpperArm.L"),
         ("Hand.L", wr_l, fg_l, "Forearm.L"),
-        ("Clavicle.R", (0.05, -0.05, 1.38), sh_r, "Chest"),
+        ("Clavicle.R", (0.05, -0.06, 1.37), sh_r, "Chest"),
         ("UpperArm.R", sh_r, el_r, "Clavicle.R"),
         ("Forearm.R", el_r, wr_r, "UpperArm.R"),
         ("Hand.R", wr_r, fg_r, "Forearm.R"),
         ("WeaponSocket", ws_head, ws_tail, "Hand.R"),
-        ("Thigh.L", (-0.105, -0.05, 0.88), (-0.105, -0.02, 0.48), "Hips"),
+        ("Thigh.L", (-0.105, -0.06, 0.88), (-0.105, -0.02, 0.48), "Hips"),
         ("Shin.L", (-0.105, -0.02, 0.48), (-0.105, -0.04, 0.10), "Thigh.L"),
         ("Foot.L", (-0.105, -0.04, 0.10), (-0.105, 0.11, 0.02), "Shin.L"),
-        ("Thigh.R", (0.105, -0.05, 0.88), (0.105, -0.02, 0.48), "Hips"),
+        ("Thigh.R", (0.105, -0.06, 0.88), (0.105, -0.02, 0.48), "Hips"),
         ("Shin.R", (0.105, -0.02, 0.48), (0.105, -0.04, 0.10), "Thigh.R"),
         ("Foot.R", (0.105, -0.04, 0.10), (0.105, 0.11, 0.02), "Shin.R"),
     ]
@@ -521,6 +548,88 @@ def build_fpp_player() -> tuple[bpy.types.Object, bpy.types.Object]:
             (1, {"Chest": (-8, -12, 0), "UpperArm.R": (55, 0, -25), "UpperArm.L": (-15, 0, 15), "Thigh.R": (38, 0, 0), "Shin.R": (-52, 0, 0), "Thigh.L": (-25, 0, 0)}, (0, 0, 0)),
             (10, {"Chest": (-8, -12, 0), "UpperArm.R": (45, 0, -22), "UpperArm.L": (22, 0, 12), "Thigh.R": (-25, 0, 0), "Thigh.L": (38, 0, 0), "Shin.L": (-52, 0, 0)}, (0, 0, 0.03)),
             (18, {"Chest": (-8, -12, 0), "UpperArm.R": (55, 0, -25), "UpperArm.L": (-15, 0, 15), "Thigh.R": (38, 0, 0), "Shin.R": (-52, 0, 0), "Thigh.L": (-25, 0, 0)}, (0, 0, 0)),
+        ],
+        # --- New 12 Dying Light 1 FPP animations ---
+        "ledge_hang": [
+            (1, {"UpperArm.L": (98, 0, 14), "Forearm.L": (-16, 0, 0), "UpperArm.R": (98, 0, -14), "Forearm.R": (-16, 0, 0),
+                 "Spine": (6, 0, 0), "Thigh.L": (18, 0, 0), "Shin.L": (-26, 0, 0), "Thigh.R": (12, 0, 0), "Shin.R": (-18, 0, 0)}, (0, -0.04, -0.05)),
+            (20, {"UpperArm.L": (95, 0, 14), "Forearm.L": (-20, 0, 0), "UpperArm.R": (95, 0, -14), "Forearm.R": (-20, 0, 0),
+                  "Spine": (8, 0, 0), "Thigh.L": (22, 0, 0), "Shin.L": (-30, 0, 0), "Thigh.R": (14, 0, 0), "Shin.R": (-20, 0, 0)}, (0, -0.04, -0.07)),
+            (40, {"UpperArm.L": (98, 0, 14), "Forearm.L": (-16, 0, 0), "UpperArm.R": (98, 0, -14), "Forearm.R": (-16, 0, 0),
+                  "Spine": (6, 0, 0), "Thigh.L": (18, 0, 0), "Shin.L": (-26, 0, 0), "Thigh.R": (12, 0, 0), "Shin.R": (-18, 0, 0)}, (0, -0.04, -0.05)),
+        ],
+        "shimmy_left": [
+            (1, {"UpperArm.L": (98, 0, 26), "Forearm.L": (-12, 0, 0), "UpperArm.R": (92, 0, -8), "Forearm.R": (-22, 0, 0),
+                 "Chest": (0, -8, 10), "Thigh.L": (24, 0, -6), "Shin.L": (-30, 0, 0)}, (-0.06, -0.04, -0.04)),
+            (12, {"UpperArm.L": (92, 0, 10), "Forearm.L": (-24, 0, 0), "UpperArm.R": (100, 0, -20), "Forearm.R": (-14, 0, 0),
+                  "Chest": (0, 6, -8), "Thigh.R": (22, 0, 6), "Shin.R": (-28, 0, 0)}, (0.04, -0.04, -0.06)),
+            (24, {"UpperArm.L": (98, 0, 26), "Forearm.L": (-12, 0, 0), "UpperArm.R": (92, 0, -8), "Forearm.R": (-22, 0, 0),
+                  "Chest": (0, -8, 10), "Thigh.L": (24, 0, -6), "Shin.L": (-30, 0, 0)}, (-0.06, -0.04, -0.04)),
+        ],
+        "shimmy_right": [
+            (1, {"UpperArm.R": (98, 0, -26), "Forearm.R": (-12, 0, 0), "UpperArm.L": (92, 0, 8), "Forearm.L": (-22, 0, 0),
+                 "Chest": (0, 8, -10), "Thigh.R": (24, 0, 6), "Shin.R": (-30, 0, 0)}, (0.06, -0.04, -0.04)),
+            (12, {"UpperArm.R": (92, 0, -10), "Forearm.R": (-24, 0, 0), "UpperArm.L": (100, 0, 20), "Forearm.L": (-14, 0, 0),
+                  "Chest": (0, -6, 8), "Thigh.L": (22, 0, -6), "Shin.L": (-28, 0, 0)}, (-0.04, -0.04, -0.06)),
+            (24, {"UpperArm.R": (98, 0, -26), "Forearm.R": (-12, 0, 0), "UpperArm.L": (92, 0, 8), "Forearm.L": (-22, 0, 0),
+                  "Chest": (0, 8, -10), "Thigh.R": (24, 0, 6), "Shin.R": (-30, 0, 0)}, (0.06, -0.04, -0.04)),
+        ],
+        "wall_run_up": [
+            (1, {"Chest": (10, 0, 0), "UpperArm.L": (88, 0, 12), "Forearm.L": (-18, 0, 0), "UpperArm.R": (42, 0, -12),
+                 "Thigh.L": (64, 0, 0), "Shin.L": (-80, 0, 0), "Thigh.R": (-12, 0, 0)}, (0, 0, 0.02)),
+            (8, {"Chest": (10, 0, 0), "UpperArm.L": (42, 0, 12), "UpperArm.R": (88, 0, -12), "Forearm.R": (-18, 0, 0),
+                 "Thigh.L": (-12, 0, 0), "Thigh.R": (64, 0, 0), "Shin.R": (-80, 0, 0)}, (0, 0, 0.05)),
+            (16, {"Chest": (10, 0, 0), "UpperArm.L": (88, 0, 12), "Forearm.L": (-18, 0, 0), "UpperArm.R": (42, 0, -12),
+                  "Thigh.L": (64, 0, 0), "Shin.L": (-80, 0, 0), "Thigh.R": (-12, 0, 0)}, (0, 0, 0.02)),
+        ],
+        "landing_roll": [
+            (1, {"Spine": (-38, 0, 0), "Chest": (-28, 0, 0), "Thigh.L": (72, 0, 0), "Shin.L": (-98, 0, 0), "Thigh.R": (72, 0, 0), "Shin.R": (-98, 0, 0),
+                 "UpperArm.L": (55, 0, -15), "UpperArm.R": (55, 0, 15)}, (0, 0.06, -0.35)),
+            (10, {"Hips": (-78, 0, 0), "Spine": (-30, 0, 0), "Thigh.L": (92, 0, 0), "Shin.L": (-115, 0, 0), "Thigh.R": (92, 0, 0), "Shin.R": (-115, 0, 0),
+                  "UpperArm.L": (35, 0, -25), "UpperArm.R": (35, 0, 25)}, (0, 0.14, -0.58)),
+            (22, {"Hips": (0, 0, 0), "Spine": (-10, 0, 0), "Thigh.L": (25, 0, 0), "Shin.L": (-35, 0, 0), "Thigh.R": (15, 0, 0), "Shin.R": (-20, 0, 0)}, (0, 0, -0.10)),
+        ],
+        "tackle": [
+            (1, {"Chest": (-22, 0, -16), "Spine": (-16, 0, 0), "UpperArm.L": (48, 0, -24), "Forearm.L": (30, 0, 0),
+                 "UpperArm.R": (42, 0, 26), "Forearm.R": (30, 0, 0), "Thigh.L": (36, 0, 0), "Shin.L": (-48, 0, 0), "Thigh.R": (-24, 0, 0)}, (0, 0.08, -0.08)),
+            (14, {"Chest": (-26, 0, -18), "Spine": (-18, 0, 0), "UpperArm.L": (52, 0, -26), "Forearm.L": (34, 0, 0),
+                  "UpperArm.R": (46, 0, 28), "Forearm.R": (34, 0, 0), "Thigh.L": (-20, 0, 0), "Thigh.R": (38, 0, 0), "Shin.R": (-50, 0, 0)}, (0, 0.10, -0.10)),
+            (22, {"Chest": (0, 0, 0), "Spine": (0, 0, 0), "UpperArm.L": (0, 0, 0), "UpperArm.R": (0, 0, 0)}, (0, 0, 0)),
+        ],
+        "grapple": [
+            (1, {"UpperArm.L": (76, 0, 6), "Forearm.L": (-8, 0, 0), "Hand.L": (12, 0, 0), "Chest": (-6, 0, 12), "UpperArm.R": (-12, 0, -10)}, (0, 0, 0)),
+            (10, {"UpperArm.L": (84, 0, 4), "Forearm.L": (18, 0, 0), "Chest": (14, 0, 10), "UpperArm.R": (-16, 0, -14), "Thigh.L": (32, 0, 0), "Shin.L": (-45, 0, 0)}, (0, 0.06, 0.04)),
+            (22, {"UpperArm.L": (45, 0, 8), "Forearm.L": (24, 0, 0), "Chest": (4, 0, 4), "UpperArm.R": (0, 0, 0)}, (0, 0, 0)),
+        ],
+        "ground_pound": [
+            (1, {"Spine": (14, 0, 0), "Chest": (12, 0, 0), "UpperArm.R": (108, 0, 18), "Forearm.R": (22, 0, 0),
+                 "UpperArm.L": (102, 0, -22), "Forearm.L": (22, 0, 0), "Thigh.L": (38, 0, 0), "Shin.L": (-65, 0, 0), "Thigh.R": (38, 0, 0), "Shin.R": (-65, 0, 0)}, (0, 0, 0.04)),
+            (10, {"Spine": (-26, 0, 0), "Chest": (-22, 0, 0), "UpperArm.R": (28, 0, 22), "Forearm.R": (-18, 0, 0),
+                  "UpperArm.L": (32, 0, -22), "Forearm.L": (-18, 0, 0), "Thigh.L": (64, 0, 0), "Shin.L": (-90, 0, 0), "Thigh.R": (58, 0, 0), "Shin.R": (-85, 0, 0)}, (0, 0.04, -0.36)),
+            (22, {"Spine": (0, 0, 0), "Chest": (0, 0, 0), "UpperArm.R": (0, 0, 0), "UpperArm.L": (0, 0, 0)}, (0, 0, 0)),
+        ],
+        "stomp": [
+            (1, {"Thigh.R": (72, 0, 0), "Shin.R": (-78, 0, 0), "Foot.R": (-12, 0, 0), "Spine": (10, 0, 0), "UpperArm.L": (14, 0, 14), "UpperArm.R": (-10, 0, -10)}, (0, 0, 0.02)),
+            (9, {"Thigh.R": (24, 0, 0), "Shin.R": (-14, 0, 0), "Foot.R": (16, 0, 0), "Spine": (-16, 0, 0), "UpperArm.L": (-12, 0, 18), "UpperArm.R": (12, 0, -18)}, (0, 0.04, -0.12)),
+            (19, {"Thigh.R": (0, 0, 0), "Shin.R": (0, 0, 0), "Spine": (0, 0, 0)}, (0, 0, 0)),
+        ],
+        "grab_struggle": [
+            (1, {"Chest": (8, -12, 16), "UpperArm.L": (68, 0, 12), "Forearm.L": (16, 0, 0), "UpperArm.R": (32, 0, -24), "Forearm.R": (26, 0, 0)}, (0, -0.03, 0)),
+            (8, {"Chest": (10, 14, -18), "UpperArm.L": (54, 0, -8), "Forearm.L": (28, 0, 0), "UpperArm.R": (66, 0, -10), "Forearm.R": (14, 0, 0)}, (0, -0.02, 0)),
+            (16, {"Chest": (8, -12, 16), "UpperArm.L": (68, 0, 12), "Forearm.L": (16, 0, 0), "UpperArm.R": (32, 0, -24), "Forearm.R": (26, 0, 0)}, (0, -0.03, 0)),
+        ],
+        "exhausted_swing": [
+            (1, {"Chest": (-12, 0, -8), "UpperArm.R": (18, -12, -16), "Forearm.R": (14, 0, 0), "UpperArm.L": (8, 0, 8)}, (0, 0, -0.04)),
+            (12, {"Chest": (-18, 0, 12), "UpperArm.R": (32, 18, 28), "Forearm.R": (-12, 10, 12), "Hand.R": (12, 0, 10), "UpperArm.L": (10, 0, 10)}, (0, 0.01, -0.06)),
+            (28, {"Chest": (-10, 0, 0), "UpperArm.R": (0, 0, 0), "Forearm.R": (0, 0, 0)}, (0, 0, -0.02)),
+        ],
+        "crouch_idle": [
+            (1, {"Spine": (-12, 0, 0), "Chest": (-8, 0, 0), "Thigh.L": (66, 0, -4), "Shin.L": (-92, 0, 0), "Thigh.R": (62, 0, 4), "Shin.R": (-88, 0, 0),
+                 "UpperArm.L": (10, 0, 6), "UpperArm.R": (8, 0, -6)}, (0, -0.02, -0.42)),
+            (24, {"Spine": (-15, 0, 0), "Chest": (-10, 0, 0), "Thigh.L": (68, 0, -4), "Shin.L": (-95, 0, 0), "Thigh.R": (64, 0, 4), "Shin.R": (-91, 0, 0),
+                  "UpperArm.L": (12, 0, 6), "UpperArm.R": (10, 0, -6)}, (0, -0.02, -0.44)),
+            (48, {"Spine": (-12, 0, 0), "Chest": (-8, 0, 0), "Thigh.L": (66, 0, -4), "Shin.L": (-92, 0, 0), "Thigh.R": (62, 0, 4), "Shin.R": (-88, 0, 0),
+                  "UpperArm.L": (10, 0, 6), "UpperArm.R": (8, 0, -6)}, (0, -0.02, -0.42)),
         ],
     }
     for aname, kfs in anims.items():
