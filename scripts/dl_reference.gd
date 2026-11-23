@@ -240,6 +240,31 @@ static func classify_landing_tier(fall_dist: float, on_amortizer: bool, has_crou
 	return 5 # Tier 5: Heavy/lethal impact landing
 
 
+# FPP Look/Aim pitch distribution (data/scripts/playeraimlookparamsfpp.scr)
+const LOOK_DIST_VERT_UP := 1.0
+const LOOK_DIST_VERT_DOWN := 0.5
+const LOOK_DIST_VERT_DOWN_PARAM := 1.2
+
+# Exact m_fpp_*.scr animation blend-ins & early-exit ratios
+const BLEND_JUMP := 0.30
+const BLEND_VAULT := 0.10
+const BLEND_LAND := 0.10
+const BLEND_CLIMB_FAST := 0.00
+const BLEND_DODGE := 0.10
+const BLEND_MELEE := 0.06
+const BLEND_LOCOMOTION := 0.16
+const LAND_ROLL_CAN_WALK_RATIO := 26.0 / 30.0
+
+
+static func compute_fpp_spine_pitch(pitch_rad: float) -> float:
+	# playeraimlookparamsfpp.scr: 100% spine pitch looking up (+70°), 50% pow 1.2 looking down (-89°)
+	if pitch_rad >= 0.0:
+		return pitch_rad * LOOK_DIST_VERT_UP
+	var max_down := deg_to_rad(absf(LOOK_PITCH_MIN_DEG))
+	var norm := clampf(absf(pitch_rad) / max_down, 0.0, 1.0)
+	return -pow(norm, LOOK_DIST_VERT_DOWN_PARAM) * max_down * LOOK_DIST_VERT_DOWN
+
+
 static func get_metric_keys() -> PackedStringArray:
 	return PackedStringArray(METRIC_ORDER)
 

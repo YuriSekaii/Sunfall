@@ -85,7 +85,17 @@ func _ready() -> void:
 	_build_ambient_audio()
 	_maintain_outdoor_zombies()
 	_push_log("Plane crashed! Gather loot before sundown (Day 1/10).")
-	call_deferred("_set_mouse_captured", true)
+	var cap_dir := ""
+	for arg in OS.get_cmdline_user_args():
+		if arg.begins_with("--visual-capture="):
+			cap_dir = arg.substr("--visual-capture=".length())
+	if not cap_dir.is_empty():
+		var harness_script := load("res://tests/live_visual_harness.gd") as GDScript
+		var harness: Node = harness_script.new()
+		harness.call("setup", self, _player, cap_dir)
+		add_child(harness)
+	else:
+		call_deferred("_set_mouse_captured", true)
 
 
 func _register_inputs() -> void:

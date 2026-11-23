@@ -76,7 +76,10 @@ Calibrated directly from `DW/Data0.pak` and `gamedll_x64_rwdi.dll` reverse-engin
   * **Fitness**: Drains `0.10/s` sprinting and `0.10` per jump (`0.75s` delay / `5.0s` on empty, `2.0/s` regen, `0.75×` while moving/crouching); sprint gated by `fitness > 0.06` & non-exhausted, with smooth `0.8 + 0.2 * clamp((fitness - 0.2)/0.3, 0, 1)` speed curve.
   * **Combat Stamina**: `2.5s` delay / `4.0s` on empty, `1.5/s` regen, `0.6×` cost on miss; exhausted swings remain usable (`1.567s` cycle, `0.65×` dmg).
   * **Needs**: Max HP `100` (slow regen up to `25 HP`); Hunger `-0.16/s`, Thirst `-0.22/s` (`0` causes `-20%` speed and `-0.35 HP/s` down to `1 HP`).
-* **FPP Rig & Camera Coupling (`CameraFPPDI`, `LookController`, `player_dieselpunk_fpp`)**: Extracted real Dying Light 1 `player_dieselpunk_fpp` FPP mesh (`14,554` verts, hands + watch + legs + torso) with `21` bones incl. `WeaponSocket` and `EyeCamera` (`idx=14`), `28` `.scr`-timed clips, `LookParams` `[-89°, +70°]` pitch clamp, `LookController` cosine slew (`0.25 - cos(x*pi)*0.25`), `0.133s` `LookBack` whip, and stride footsteps (`0.567s` sprint / `0.883s` walk).
+* **FPP Rig & Camera Coupling (`CameraFPPDI`, `LookController`, `player_dieselpunk_fpp`)**: Extracted real Dying Light 1 `player_dieselpunk_fpp` FPP mesh (`14,554` verts, hands + watch + legs + torso) with `21` bones incl. `WeaponSocket` and `EyeCamera` (`idx=14`), `29` `.scr`-timed clips (incl. `jump_air`), `LookParams` `[-89°, +70°]` pitch clamp with `playeraimlookparamsfpp.scr` spine pitch distribution (`1.0` up / `0.5 pow 1.2` down, `0.0` in jump), `LookController` cosine slew (`0.25 - cos(x*pi)*0.25`), `0.133s` `LookBack` whip, posture-aware torso clearance, and stride footsteps (`0.567s` sprint / `0.883s` walk).
+* **Live 30 FPS Vulkan Visual Capture (`tools/run_visual_harness.py`, `tests/live_visual_harness.gd`)**: Boots `scenes/main.tscn` in real Vulkan Forward+ (`-- --visual-capture=<dir>`), records 30 FPS sequential bursts across framing, sprint/jump, vault, high mantle, slide, dodge, melee, kick/dropkick/stomp, and 3rd-person sanity, and outputs labeled contact sheets + 30 FPS `.mp4` clips into `.gitignore`d `assets_ref/visual_debug/`.
+
+> **Development Rule (`AGENTS.md`)**: Every mechanic must be grounded by directly reading the actual Dying Light 1 / 7 Days to Die / The Forest game files (`report/dl1_re/`), never guessed.
 
 ### 2. Melee Combat & Weapons (`scripts/player.gd`, `scripts/loot_table.gd`)
 * **Continuous `±60°` Sweep, Headshots & Active Windows**: Light swings alternate RL (`0.600s`, hit `[0.093s..0.333s]`) and LR (`0.500s`, hit `[0.083s..0.333s]`) with `±6°` camera roll, continuous `±60°` multi-target sweep + per-swing deduplication, `2.0×` Headshot Crits (`z.is_headshot_pos`), and `0.045s` hit-pause + particle bursts.
@@ -132,9 +135,12 @@ Sunfall/
 │   ├── extract_dl_assets.py          # Dying Light RP6L archive & FPP player extractor
 │   ├── rig_and_animate_dl.py         # Blender 5.3.0 rigging (EyeCamera + 28 .scr-timed clips)
 │   ├── re_dl_data.py                 # Data0.pak / Data2.pak / .rpack catalog extractor
-│   └── re_dl_binary.py               # gamedll_x64_rwdi.dll RTTI/VTable & disassembly mapper
+│   ├── re_dl_binary.py               # gamedll_x64_rwdi.dll RTTI/VTable & disassembly mapper
+│   ├── re_dl_fluidity.py             # Data0.pak LookParams, playerfppbodyvis & blend-time extractor
+│   ├── inspect_dl_mesh_anim.py       # Binary 40B vertex weight/UV, DDS mip & ANM2 v42 inspector
+│   └── run_visual_harness.py         # Live 30 FPS Vulkan capture -> contact sheets & MP4 clips
 ├── report/
-│   └── dl1_re/                       # Reverse-engineered Dying Light 1 data & binary specs (01..06)
+│   └── dl1_re/                       # Reverse-engineered Dying Light 1 specs (01..08)
 ├── scenes/
 │   └── main.tscn                     # Root world scene
 ├── scripts/
@@ -152,6 +158,7 @@ Sunfall/
 │   └── dl_telemetry.gd               # 60Hz movement ring-buffer, transition log, F3 scorecard & JSON dump
 ├── tests/
 │   ├── verify_prototype.gd           # Headless SceneTree prototype & gameplay verification
-│   └── verify_dl_parity.gd           # Headless physics parity suite (12 DL1 metrics + 23 functional checks)
+│   ├── verify_dl_parity.gd           # Headless physics parity suite (12 DL1 metrics + 23 functional checks)
+│   └── live_visual_harness.gd        # Deterministic 30 FPS live Vulkan scenario driver
 └── assets_ref/                       # (.gitignore) Local extracted 3D/audio/icon assets
 ```

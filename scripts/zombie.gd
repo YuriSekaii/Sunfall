@@ -114,9 +114,8 @@ func _build_visuals() -> void:
 		RefAssets.set_loop_mode_for_clips(_anim_player, ["idle_sunlight", "shamble", "chase_run"])
 		_collect_dl_meshes(_dl_rig)
 		_flash_overlay_mat = StandardMaterial3D.new()
-		_flash_overlay_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 		_flash_overlay_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-		_flash_overlay_mat.albedo_color = Color(1.0, 0.25, 0.20, 0.45)
+		_flash_overlay_mat.albedo_color = Color(0.55, 0.05, 0.05, 0.14)
 		_sunlight_overlay_mat = StandardMaterial3D.new()
 		_sunlight_overlay_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 		_sunlight_overlay_mat.albedo_color = Color(0.55, 0.52, 0.42, 0.32)
@@ -442,8 +441,10 @@ func apply_hit(damage: float, knockback: Vector3, stagger: float = 0.35) -> bool
 	hp -= damage
 	knockback_vel = Vector3(knockback.x, 0.0, knockback.z)
 	stagger_timer = maxf(stagger_timer, stagger)
-	_flash_timer = 0.10
+	_flash_timer = 0.07
 	_refresh_sunlight_visuals()
+	if hp > 0.0 and not is_downed():
+		_play_anim("stagger")
 	if hp <= 0.0:
 		_is_dying = true
 		downed_timer = 0.0

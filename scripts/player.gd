@@ -54,6 +54,8 @@ var _fpp_skel: Skeleton3D
 var _fpp_anim: AnimationPlayer
 var _weapon_socket: BoneAttachment3D
 var _eye_camera_bone_idx: int = -1
+var _spine_bone_idx: int = -1
+var _chest_bone_idx: int = -1
 var _eye_camera_rest: Transform3D = Transform3D.IDENTITY
 var _eye_camera_offset_rot: Vector3 = Vector3.ZERO
 var _current_fpp_anim: String = ""
@@ -123,6 +125,7 @@ var _suppress_click_until_msec: int = 0
 var allow_headless_mouse_look_for_test: bool = false
 
 # DL1 combat & parkour state (WeaponMeleeController 0x00cfe531 continuous ±60° sweep)
+var _melee_hold_pending: bool = false
 var _melee_charging: bool = false
 var _melee_charge_time: float = 0.0
 var _melee_swing_start_time: float = 0.0
@@ -229,6 +232,7 @@ func _build_rig() -> void:
 
 	_camera = Camera3D.new()
 	_camera.fov = BASE_FOV
+	_camera.near = 0.03
 	_camera.current = true
 	_head.add_child(_camera)
 
@@ -335,6 +339,24 @@ func _setup_eye_camera_bone() -> void:
 	if _eye_camera_bone_idx != -1:
 		_eye_camera_rest = _fpp_skel.get_bone_rest(_eye_camera_bone_idx)
 		telemetry.record_binary_event("eye_camera_coupled", true)
+	_spine_bone_idx = _fpp_skel.find_bone("Spine")
+	_chest_bone_idx = _fpp_skel.find_bone("Chest")
+	if _chest_bone_idx != -1 and not _fpp_skel.skeleton_updated.is_connected(_on_fpp_skeleton_updated):
+		_fpp_skel.skeleton_updated.connect(_on_fpp_skeleton_updated)
+
+
+func _on_fpp_skeleton_updated() -> void:
+	if _fpp_skel == null or _chest_bone_idx == -1:
+		return
+	# LookParams("Jump"): 0.0 vertical spine distribution while airborne; also skip during parkour/crouch/slide
+	if not is_on_floor() or _ledge_hanging or _vaulting or _landing_roll_timer > 0.0 or _slide_timer > 0.0 or _is_crouching:
+		return
+	var spine_pitch := DLReference.compute_fpp_spine_pitch(_pitch)
+	if _spine_bone_idx != -1:
+		var s_rot := _fpp_skel.get_bone_pose_rotation(_spine_bone_idx)
+		_fpp_skel.set_bone_pose_rotation(_spine_bone_idx, s_rot * Quaternion(Vector3.RIGHT, -spine_pitch * 0.35))
+	var c_rot := _fpp_skel.get_bone_pose_rotation(_chest_bone_idx)
+	_fpp_skel.set_bone_pose_rotation(_chest_bone_idx, c_rot * Quaternion(Vector3.RIGHT, -spine_pitch * 0.65))
 
 
 func _exit_tree() -> void:
@@ -596,17 +618,23 @@ func _handle_hotkeys(delta: float) -> void:
 		elif not is_on_floor() and not _wall_running and not _ledge_hanging and ((_pitch < -0.35 and _height_above_ground() >= 1.1) or Input.is_action_pressed("crouch")):
 			_try_ground_pound()
 		elif active_slot == 1:
-			_melee_charging = true
+			_melee_hold_pending = true
+			_melee_charging = false
 			_melee_charge_time = 0.0
 		else:
 			_perform_primary()
 
-	if _melee_charging:
+	if _melee_hold_pending or _melee_charging:
 		if active_slot != 1:
+			_melee_hold_pending = false
 			_melee_charging = false
 		elif Input.is_action_pressed("primary_action"):
 			_melee_charge_time += delta
+			if _melee_hold_pending and _melee_charge_time >= 0.14:
+				_melee_hold_pending = false
+				_melee_charging = true
 		else:
+			_melee_hold_pending = false
 			_melee_charging = false
 			_melee_swing(_melee_charge_time >= DLReference.CHARGE_HOLD_DURATION)
 
@@ -631,7 +659,10 @@ func _process_vault(delta: float) -> void:
 			fwd.y = 0.0
 			velocity = fwd.normalized() * _vault_exit_speed
 		else:
-			velocity = Vector3.ZERO
+			var fwd := -transform.basis.z
+			fwd.y = 0.0
+			var exit_spd := (DLReference.SPRINT_SPEED * 0.85 if Input.is_action_pressed("sprint") else DLReference.WALK_SPEED) if Input.is_action_pressed("move_forward") else 0.0
+			velocity = fwd.normalized() * exit_spd
 			_cam_punch = -0.05
 	else:
 		var ease_t := 1.0 - pow(1.0 - _vault_t, 2.0)
@@ -681,7 +712,8 @@ func _process_movement(delta: float) -> void:
 		Sfx.play(self, "climb", -9.0, 1.25)
 
 	# 4-Phase Crouch-Slide (0x00cfbf50: SlideBegin 0.333s -> SlideLoop / SlideLoopRight [yaw > 5°] -> SlideKick -> SlideEnd)
-	if Input.is_action_just_pressed("crouch") and is_on_floor() and Vector2(velocity.x, velocity.z).length() > 4.6 and _slide_timer <= 0.0 and _slide_cd <= 0.0 and _landing_roll_timer <= 0.0:
+	var hs_now := Vector2(velocity.x, velocity.z).length()
+	if Input.is_action_just_pressed("crouch") and is_on_floor() and (hs_now > 4.2 or (wants_sprint and hs_now > 3.5)) and _slide_timer <= 0.0 and _slide_cd <= 0.0 and _landing_roll_timer <= 0.0:
 		_slide_total_dur = DLReference.SLIDE_BEGIN_DUR + DLReference.SLIDE_LOOP_DUR
 		_slide_timer = _slide_total_dur
 		_slide_elapsed = 0.0
@@ -1131,7 +1163,7 @@ func _process_ledge_hang(delta: float) -> void:
 			Sfx.play(self, "climb", -12.0, 1.12)
 
 
-func _probe_nm_three_bands(forward: Vector3) -> Dictionary:
+func _probe_nm_three_bands(forward: Vector3, probe_reach: float = 1.35) -> Dictionary:
 	# NaturalMovementController (0x00d5733c): 3 vertical mantle probe bands at 0.85m, 1.35m, 1.65m
 	var space := get_world_3d().direct_space_state
 	var bands := [DLReference.NM_PROBE_BAND_LOW, DLReference.NM_PROBE_BAND_MID, DLReference.NM_PROBE_BAND_HIGH]
@@ -1140,7 +1172,7 @@ func _probe_nm_three_bands(forward: Vector3) -> Dictionary:
 	for idx in bands.size():
 		var h := float(bands[idx])
 		var from := global_position + Vector3(0.0, h, 0.0)
-		var hit := space.intersect_ray(PhysicsRayQueryParameters3D.create(from, from + forward * 1.15, 1 | 16, [get_rid()]))
+		var hit := space.intersect_ray(PhysicsRayQueryParameters3D.create(from, from + forward * probe_reach, 1 | 16, [get_rid()]))
 		if not hit.is_empty():
 			highest_hit_band = idx + 1
 			if first_hit.is_empty():
@@ -1155,17 +1187,21 @@ func _try_vault() -> bool:
 	forward.y = 0.0
 	forward = forward.normalized()
 	var space := get_world_3d().direct_space_state
+	var reach := clampf(1.15 + maxf(0.0, Vector2(velocity.x, velocity.z).length() - 3.5) * 0.25, 1.15, 1.85) if is_on_floor() else 0.90
 
-	var nm_probe := _probe_nm_three_bands(forward)
+	var nm_probe := _probe_nm_three_bands(forward, reach)
 	if int(nm_probe["highest_band"]) == 0:
 		return false
 
+	var hit_dist := global_position.distance_to(Vector3(nm_probe["hit"]["position"].x, global_position.y, nm_probe["hit"]["position"].z))
+	var forward_step := clampf(hit_dist + 0.45, 0.85, reach + 0.25)
+
 	var head_from := global_position + Vector3(0.0, 2.45, 0.0)
-	var head_hit := space.intersect_ray(PhysicsRayQueryParameters3D.create(head_from, head_from + forward * 1.15, 1 | 16, [get_rid()]))
+	var head_hit := space.intersect_ray(PhysicsRayQueryParameters3D.create(head_from, head_from + forward * reach, 1 | 16, [get_rid()]))
 	if not head_hit.is_empty():
 		return false
 
-	var top_probe := global_position + Vector3(0.0, 2.55, 0.0) + forward * 0.95
+	var top_probe := global_position + Vector3(0.0, 2.55, 0.0) + forward * forward_step
 	var down_hit := space.intersect_ray(PhysicsRayQueryParameters3D.create(top_probe, top_probe + Vector3(0.0, -2.2, 0.0), 1 | 16, [get_rid()]))
 	if down_hit.is_empty():
 		return false
@@ -1178,6 +1214,9 @@ func _try_vault() -> bool:
 	_vaulting = true
 	_vault_t = 0.0
 	_vault_start = global_position
+	_swing_roll_impulse = deg_to_rad(5.5)
+	_swing_roll_timer = 0.22
+	_cam_punch = -0.065
 	if height_diff <= 1.25:
 		_vault_kind = "vault"
 		_vault_dur = 0.26
@@ -1534,6 +1573,8 @@ func _process_grabbed(delta: float) -> void:
 	if to_z.length() > 0.05:
 		_yaw = atan2(-to_z.x, -to_z.z)
 		rotation.y = _yaw
+		if to_z.length() < 0.95:
+			_grabbed_by.global_position = global_position + to_z.normalized() * 0.95
 	_grab_damage_tick -= delta
 	if _grab_damage_tick <= 0.0:
 		_grab_damage_tick = 0.85
@@ -1673,6 +1714,14 @@ func _update_camera_and_viewmodel(delta: float) -> void:
 	_mouse_turn_dy = 0.0
 
 	if _fpp_rig != null:
+		var target_rig_pos := Vector3(0.0, 0.0, 0.16)
+		if _slide_timer > 0.0:
+			target_rig_pos = Vector3(0.0, -0.52, 0.46)
+		elif _is_crouching:
+			target_rig_pos = Vector3(0.0, -0.56, 0.46)
+		elif _dodge_timer > 0.0:
+			target_rig_pos = Vector3(0.0, -0.04, 0.24)
+		_fpp_rig.position = _fpp_rig.position.lerp(target_rig_pos, clampf(delta * 14.0, 0.0, 1.0))
 		_fpp_rig.rotation.y = lerpf(_fpp_rig.rotation.y, lag_x, clampf(delta * 12.0, 0.0, 1.0))
 		_fpp_rig.rotation.x = lerpf(_fpp_rig.rotation.x, lag_y, clampf(delta * 12.0, 0.0, 1.0))
 		_update_fpp_animation(horiz_speed)
@@ -1696,13 +1745,13 @@ func _hide_head_meshes(node: Node) -> void:
 		_hide_head_meshes(child)
 
 
-func _play_fpp_anim(anim_name: String, force: bool = false) -> void:
+func _play_fpp_anim(anim_name: String, force: bool = false, blend: float = 0.12) -> void:
 	if _fpp_anim == null or not _fpp_anim.has_animation(anim_name):
 		return
 	if not force and _current_fpp_anim == anim_name and _fpp_anim.is_playing():
 		return
 	_current_fpp_anim = anim_name
-	_fpp_anim.play(anim_name, 0.12)
+	_fpp_anim.play(anim_name, blend)
 
 
 func _update_fpp_animation(horiz_speed: float) -> void:
@@ -1710,47 +1759,49 @@ func _update_fpp_animation(horiz_speed: float) -> void:
 		return
 	_fpp_anim.speed_scale = 0.0 if _hit_pause_timer > 0.0 else 1.0
 	if _grabbed_by != null:
-		_play_fpp_anim("grab_struggle")
+		_play_fpp_anim("grab_struggle", false, 0.08)
 	elif _grappling:
-		_play_fpp_anim("grapple")
+		_play_fpp_anim("grapple", false, 0.06)
 	elif _ground_pounding:
-		_play_fpp_anim("ground_pound")
+		_play_fpp_anim("ground_pound", false, 0.06)
 	elif _vaulting:
-		_play_fpp_anim("vault" if _vault_kind == "zombie_vault" else _vault_kind)
+		_play_fpp_anim("vault" if _vault_kind == "zombie_vault" else _vault_kind, false, 0.06)
 	elif _dropkicking:
-		_play_fpp_anim("dropkick")
+		_play_fpp_anim("dropkick", false, 0.06)
 	elif _landing_roll_timer > 0.0:
-		_play_fpp_anim("landing_roll")
+		_play_fpp_anim("landing_roll", false, 0.06)
 	elif _tackle_timer > 0.0:
-		_play_fpp_anim("tackle")
+		_play_fpp_anim("tackle", false, 0.06)
 	elif _dodge_timer > 0.0:
-		_play_fpp_anim(_dodge_anim_name)
+		_play_fpp_anim(_dodge_anim_name, false, 0.06)
 	elif _slide_timer > 0.0:
-		_play_fpp_anim("slide")
+		_play_fpp_anim("slide", false, 0.08)
 	elif _ledge_hanging:
 		if _shimmy_dir < 0:
-			_play_fpp_anim("shimmy_left")
+			_play_fpp_anim("shimmy_left", false, 0.08)
 		elif _shimmy_dir > 0:
-			_play_fpp_anim("shimmy_right")
+			_play_fpp_anim("shimmy_right", false, 0.08)
 		else:
-			_play_fpp_anim("ledge_hang")
+			_play_fpp_anim("ledge_hang", false, 0.10)
 	elif _wall_running:
 		if _wall_run_up:
-			_play_fpp_anim("wall_run_up")
+			_play_fpp_anim("wall_run_up", false, 0.08)
 		else:
-			_play_fpp_anim("wall_run_left" if _wall_run_side < 0 else "wall_run_right")
+			_play_fpp_anim("wall_run_left" if _wall_run_side < 0 else "wall_run_right", false, 0.08)
 	elif _fpp_action_lock_timer > 0.0:
 		pass
 	elif _melee_charging:
-		_play_fpp_anim("heavy_charge")
+		_play_fpp_anim("heavy_charge", false, 0.10)
+	elif not is_on_floor():
+		_play_fpp_anim("jump_air" if _fpp_anim.has_animation("jump_air") else "idle", false, 0.12)
 	elif _is_crouching:
-		_play_fpp_anim("crouch_idle")
-	elif horiz_speed > 4.6 and is_on_floor():
-		_play_fpp_anim("sprint")
-	elif horiz_speed > 0.35 and is_on_floor():
-		_play_fpp_anim("walk")
+		_play_fpp_anim("crouch_idle", false, 0.16)
+	elif horiz_speed > 4.6:
+		_play_fpp_anim("sprint", false, 0.16)
+	elif horiz_speed > 0.35:
+		_play_fpp_anim("walk", false, 0.16)
 	else:
-		_play_fpp_anim("idle")
+		_play_fpp_anim("idle", false, 0.16)
 
 
 func _perform_primary() -> void:
@@ -1935,18 +1986,19 @@ func _spawn_impact_burst(pos: Vector3, tint: Color) -> void:
 	var mat := StandardMaterial3D.new()
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	mat.albedo_color = tint
-	for i in 6:
+	for i in 10:
 		var p := MeshInstance3D.new()
 		var box := BoxMesh.new()
-		box.size = Vector3(0.055, 0.055, 0.055)
+		var sz := randf_range(0.035, 0.075)
+		box.size = Vector3(sz, sz, sz)
 		p.mesh = box
 		p.material_override = mat
 		parent.add_child(p)
 		p.global_position = pos
-		var vel := Vector3(randf_range(-1.0, 1.0), randf_range(0.2, 1.4), randf_range(-1.0, 1.0)).normalized() * randf_range(2.0, 4.5)
+		var vel := Vector3(randf_range(-1.2, 1.2), randf_range(0.4, 1.6), randf_range(-1.2, 1.2)).normalized() * randf_range(2.2, 5.2)
 		var tw := p.create_tween()
-		tw.tween_property(p, "global_position", pos + vel * 0.24, 0.24)
-		tw.parallel().tween_property(p, "scale", Vector3(0.05, 0.05, 0.05), 0.24)
+		tw.tween_property(p, "global_position", pos + vel * 0.24 + Vector3(0.0, -0.35, 0.0), 0.26)
+		tw.parallel().tween_property(p, "scale", Vector3(0.05, 0.05, 0.05), 0.26)
 		tw.finished.connect(p.queue_free)
 
 

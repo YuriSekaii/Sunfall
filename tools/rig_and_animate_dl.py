@@ -447,13 +447,13 @@ def build_fpp_player() -> tuple[bpy.types.Object, bpy.types.Object, str]:
     bpy.context.scene.render.fps = 120
 
     arm_pose_fpp = {
-        "L": ((-0.18, -0.06, 1.36), (-0.27, 0.18, 1.18), (-0.23, 0.38, 1.33), (-0.20, 0.49, 1.36)),
-        "R": ((0.18, -0.06, 1.36), (0.26, 0.19, 1.18), (0.21, 0.40, 1.35), (0.19, 0.51, 1.38)),
+        "L": ((-0.18, -0.06, 1.36), (-0.28, 0.10, 1.16), (-0.24, 0.24, 1.24), (-0.19, 0.32, 1.25)),
+        "R": ((0.18, -0.06, 1.36), (0.27, 0.16, 1.18), (0.22, 0.36, 1.31), (0.19, 0.46, 1.34)),
     }
     sh_l, el_l, wr_l, fg_l = arm_pose_fpp["L"]
     sh_r, el_r, wr_r, fg_r = arm_pose_fpp["R"]
     ws_head = (wr_r[0] - 0.01, (wr_r[1] + fg_r[1]) * 0.5 + 0.01, (wr_r[2] + fg_r[2]) * 0.5)
-    ws_tail = (ws_head[0] - 0.025, ws_head[1] + 0.065, ws_head[2] + 0.165)
+    ws_tail = (ws_head[0] - 0.085, ws_head[1] + 0.145, ws_head[2] + 0.125)
 
     bones_fpp = [
         ("Hips", (0.0, -0.07, 0.88), (0.0, -0.07, 1.02), None),
@@ -502,15 +502,40 @@ def build_fpp_player() -> tuple[bpy.types.Object, bpy.types.Object, str]:
                 if mi in (0, 1) or v_cat[vi] not in (0, 1):
                     v_cat[vi] = mi
 
-        # Shift trunk & legs slightly back (-0.07 Y) and keep collar below camera at (0, 0, 1.56)
+        # Shift trunk & legs back (-0.14 Y) and keep collar below camera at (0, 0, 1.56) so look-down/crouch never clips torso
         for vi, v in enumerate(mesh_obj.data.vertices):
             if v_cat[vi] == 2:
-                v.co.y -= 0.06
+                v.co.y -= 0.10
             elif v_cat[vi] == 3 and abs(v.co.x) < 0.22:
                 w_trunk = max(0.0, min(1.0, (0.22 - abs(v.co.x)) / 0.08))
-                v.co.y -= 0.07 * w_trunk
-                if v.co.z > 1.36:
-                    v.co.z = 1.36 + (v.co.z - 1.36) * (1.0 - 0.75 * w_trunk)
+                v.co.y -= 0.14 * w_trunk
+                if v.co.z > 1.32:
+                    v.co.z = 1.32 + (v.co.z - 1.32) * (1.0 - 0.82 * w_trunk)
+
+        # Curl right-hand fingers in A-pose around palm grip cylinder before retargeting
+        wr_a = Vector((0.42, 0.25, 1.06))
+        fg_a = Vector((0.41, 0.35, 0.95))
+        u_fwd = (fg_a - wr_a).normalized()
+        u_palm = Vector((-0.85, -0.32, -0.42))
+        u_palm = (u_palm - u_fwd * u_palm.dot(u_fwd)).normalized()
+        u_side = u_fwd.cross(u_palm).normalized()  # +angle around u_side rotates u_fwd -> u_palm
+        grip_a = wr_a + u_fwd * 0.068 + u_palm * 0.026
+        knuckle_a = wr_a + u_fwd * 0.056
+        for vi, v in enumerate(mesh_obj.data.vertices):
+            if v_cat[vi] == 0 and v.co.x > 0.33 and v.co.y > 0.24:
+                rel_w = v.co - wr_a
+                s_fwd = rel_w.dot(u_fwd)
+                s_side = rel_w.dot(u_side)
+                if s_fwd > 0.056 and s_side >= -0.024:
+                    t_f = min(1.0, (s_fwd - 0.056) / 0.095)
+                    ang = t_f * math.radians(125.0)
+                    rot_f = Matrix.Rotation(ang, 3, u_side)
+                    v.co = knuckle_a + rot_f @ (v.co - knuckle_a)
+                elif s_fwd > 0.032 and s_side < -0.024:
+                    # Thumb curls inward across the handle
+                    t_th = min(1.0, (s_fwd - 0.032) / 0.065)
+                    rot_th = Matrix.Rotation(t_th * math.radians(55.0), 3, u_fwd)
+                    v.co = wr_a + u_fwd * s_fwd + rot_th @ (v.co - (wr_a + u_fwd * s_fwd))
 
         # Native A-pose deform bones of player_dieselpunk_fpp
         bones_a = [
@@ -591,6 +616,20 @@ def build_fpp_player() -> tuple[bpy.types.Object, bpy.types.Object, str]:
             rot_mats[bi] = np.array(q.to_matrix(), dtype=np.float32)
             heads_fpp[bi] = np.array(hf[:], dtype=np.float32)
 
+        # Place WeaponSocket inside the curled palm center using exact Hand.R retargeting
+        hr_i = bnames.index("Hand.R")
+        r_hr = Matrix(rot_mats[hr_i].tolist())
+        ha_hr = Vector(heads_a[hr_i].tolist())
+        hf_hr = Vector(heads_fpp[hr_i].tolist())
+        ws_head_v = r_hr @ (grip_a - ha_hr) + hf_hr
+        # Weapon extends forward (+Y), up (+Z), and slightly inward (-X) out of the thumb/index side of the fist
+        grip_axis_fpp = Vector((-0.22, 0.72, 0.66)).normalized()
+        ws_tail_v = ws_head_v + grip_axis_fpp * 0.20
+        bones_fpp = [
+            (bn, tuple(ws_head_v[:]), tuple(ws_tail_v[:]), bp) if bn == "WeaponSocket" else (bn, bh, bt, bp)
+            for (bn, bh, bt, bp) in bones_fpp
+        ]
+
         new_verts = np.zeros_like(verts)
         for k in range(4):
             bi = top_idx[:, k]
@@ -667,27 +706,27 @@ def build_fpp_player() -> tuple[bpy.types.Object, bpy.types.Object, str]:
         ],
         # swing_right: FPP_Stick_Melee_Attack_RL_Empty 66..84 @ 30fps = 0.600s (73 frames), damage [0.093s..0.333s], CAMERA_ROLL -6 @ 0.20s
         "swing_right": [
-            (1, {"UpperArm.R": (25, -20, -28), "Forearm.R": (20, 0, 0), "Chest": (0, 0, -14),
-                 "EyeCamera": (1.5, 2.5, -2.5), "EyeCamera_loc": (0.0, -0.01, 0.0)}, (0, 0, 0)),
-            (12, {"UpperArm.R": (38, 12, 18), "Forearm.R": (-8, 10, 12), "Hand.R": (10, 0, 10), "Chest": (-4, 0, 6),
-                  "EyeCamera": (-1.5, -4.2, 2.5), "EyeCamera_loc": (0.0, 0.015, -0.01)}, (0, 0.01, 0)),
-            (25, {"UpperArm.R": (48, 32, 48), "Forearm.R": (-20, 18, 22), "Hand.R": (18, 0, 18), "Chest": (-8, 0, 18),
-                  "EyeCamera": (-2.8, -6.0, 4.8), "EyeCamera_loc": (-0.015, 0.025, -0.018)}, (0, 0.02, 0)),
-            (41, {"UpperArm.R": (32, 22, 34), "Forearm.R": (-12, 12, 14), "Hand.R": (10, 0, 10), "Chest": (-5, 0, 12),
-                  "EyeCamera": (-1.4, -3.2, 2.4), "EyeCamera_loc": (-0.008, 0.01, -0.01)}, (0, 0.01, 0)),
+            (1, {"UpperArm.R": (24, -36, -42), "Forearm.R": (24, -10, -10), "Chest": (4, 0, -18),
+                 "EyeCamera": (1.5, 3.0, -3.0), "EyeCamera_loc": (0.0, -0.01, 0.0)}, (0, 0, 0)),
+            (12, {"UpperArm.R": (44, 18, 28), "Forearm.R": (-14, 16, 18), "Hand.R": (12, 0, 14), "Chest": (-6, 0, 10),
+                  "EyeCamera": (-1.8, -5.0, 3.0), "EyeCamera_loc": (0.0, 0.02, -0.01)}, (0, 0.01, 0)),
+            (25, {"UpperArm.R": (56, 48, 64), "Forearm.R": (-24, 24, 30), "Hand.R": (22, 0, 24), "Chest": (-10, 0, 24),
+                  "EyeCamera": (-3.2, -7.0, 5.5), "EyeCamera_loc": (-0.015, 0.03, -0.02)}, (0, 0.02, 0)),
+            (41, {"UpperArm.R": (38, 34, 46), "Forearm.R": (-16, 16, 20), "Hand.R": (14, 0, 14), "Chest": (-6, 0, 14),
+                  "EyeCamera": (-1.6, -3.5, 2.8), "EyeCamera_loc": (-0.008, 0.015, -0.01)}, (0, 0.01, 0)),
             (73, {"UpperArm.R": (0, 0, 0), "Forearm.R": (0, 0, 0), "Hand.R": (0, 0, 0), "Chest": (0, 0, 0),
                   "EyeCamera": (0.0, 0.0, 0.0), "EyeCamera_loc": (0.0, 0.0, 0.0)}, (0, 0, 0)),
         ],
         # swing_left: FPP_Stick_Melee_Attack_LR_Empty 43..58 @ 30fps = 0.500s (61 frames), damage [0.083s..0.333s], CAMERA_ROLL +6 @ 0.20s
         "swing_left": [
-            (1, {"UpperArm.R": (25, 25, 38), "Forearm.R": (22, 0, 15), "Chest": (0, 0, 14),
-                 "EyeCamera": (1.5, -2.5, 2.5), "EyeCamera_loc": (0.0, -0.01, 0.0)}, (0, 0, 0)),
-            (13, {"UpperArm.R": (34, -14, -18), "Forearm.R": (-10, -8, -10), "Hand.R": (10, 0, -10), "Chest": (-4, 0, -6),
-                  "EyeCamera": (-1.5, 4.2, -2.5), "EyeCamera_loc": (0.0, 0.015, -0.01)}, (0, 0.01, 0)),
-            (25, {"UpperArm.R": (40, -32, -42), "Forearm.R": (-20, -16, -20), "Hand.R": (18, 0, -18), "Chest": (-8, 0, -16),
-                  "EyeCamera": (-2.5, 6.0, -4.8), "EyeCamera_loc": (0.015, 0.025, -0.018)}, (0, 0.02, 0)),
-            (41, {"UpperArm.R": (26, -20, -28), "Forearm.R": (-12, -10, -12), "Hand.R": (10, 0, -10), "Chest": (-4, 0, -10),
-                  "EyeCamera": (-1.2, 3.0, -2.2), "EyeCamera_loc": (0.008, 0.01, -0.01)}, (0, 0.01, 0)),
+            (1, {"UpperArm.R": (32, 36, 52), "Forearm.R": (22, 10, 20), "Chest": (2, 0, 18),
+                 "EyeCamera": (1.5, -3.0, 3.0), "EyeCamera_loc": (0.0, -0.01, 0.0)}, (0, 0, 0)),
+            (13, {"UpperArm.R": (42, -20, -28), "Forearm.R": (-14, -14, -16), "Hand.R": (12, 0, -14), "Chest": (-6, 0, -10),
+                  "EyeCamera": (-1.8, 5.0, -3.0), "EyeCamera_loc": (0.0, 0.02, -0.01)}, (0, 0.01, 0)),
+            (25, {"UpperArm.R": (50, -46, -58), "Forearm.R": (-24, -22, -28), "Hand.R": (20, 0, -24), "Chest": (-10, 0, -22),
+                  "EyeCamera": (-2.8, 7.0, -5.5), "EyeCamera_loc": (0.015, 0.03, -0.02)}, (0, 0.02, 0)),
+            (41, {"UpperArm.R": (32, -28, -36), "Forearm.R": (-14, -12, -16), "Hand.R": (12, 0, -14), "Chest": (-5, 0, -12),
+                  "EyeCamera": (-1.4, 3.5, -2.5), "EyeCamera_loc": (0.008, 0.015, -0.01)}, (0, 0.01, 0)),
             (61, {"UpperArm.R": (0, 0, 0), "Forearm.R": (0, 0, 0), "Hand.R": (0, 0, 0), "Chest": (0, 0, 0),
                   "EyeCamera": (0.0, 0.0, 0.0), "EyeCamera_loc": (0.0, 0.0, 0.0)}, (0, 0, 0)),
         ],
@@ -712,12 +751,12 @@ def build_fpp_player() -> tuple[bpy.types.Object, bpy.types.Object, str]:
         ],
         # kick: FPP_Unarmed_Kick 0..25 @ 40fps = 0.625s (76 frames), damage [0.250s..0.350s] (f31..f43)
         "kick": [
-            (1, {"Thigh.R": (18, 0, 0), "Shin.R": (-28, 0, 0), "UpperArm.R": (-8, 0, -8),
+            (1, {"Thigh.R": (24, 0, 0), "Shin.R": (-32, 0, 0), "UpperArm.R": (-8, 0, -8),
                  "EyeCamera": (-1.5, -1.0, 0.0), "EyeCamera_loc": (0.0, 0.0, -0.01)}, (0, 0, 0)),
-            (31, {"Thigh.R": (88, 0, 0), "Shin.R": (-12, 0, 0), "Foot.R": (-22, 0, 0), "Spine": (12, 0, 0),
-                  "UpperArm.L": (16, 0, 16), "UpperArm.R": (-10, 0, -12),
+            (31, {"Thigh.R": (98, 0, 0), "Shin.R": (-8, 0, 0), "Foot.R": (-24, 0, 0), "Spine": (14, 0, 0),
+                  "UpperArm.L": (18, 0, 16), "UpperArm.R": (-12, 0, -12),
                   "EyeCamera": (6.0, -3.5, 2.0), "EyeCamera_loc": (0.0, -0.03, -0.02)}, (0, -0.04, 0)),
-            (43, {"Thigh.R": (82, 0, 0), "Shin.R": (-16, 0, 0), "Foot.R": (-18, 0, 0), "Spine": (10, 0, 0),
+            (43, {"Thigh.R": (90, 0, 0), "Shin.R": (-14, 0, 0), "Foot.R": (-18, 0, 0), "Spine": (10, 0, 0),
                   "UpperArm.L": (14, 0, 14), "UpperArm.R": (-8, 0, -10),
                   "EyeCamera": (4.5, -2.5, 1.5), "EyeCamera_loc": (0.0, -0.025, -0.015)}, (0, -0.03, 0)),
             (76, {"Thigh.R": (0, 0, 0), "Shin.R": (0, 0, 0), "Foot.R": (0, 0, 0), "Spine": (0, 0, 0),
@@ -725,16 +764,28 @@ def build_fpp_player() -> tuple[bpy.types.Object, bpy.types.Object, str]:
         ],
         # dropkick: FPP_Unarmed_KickWrestling 10..34 @ 30fps = 0.800s (97 frames), damage [0.100s..0.300s] (f13..f37)
         "dropkick": [
-            (1, {"Thigh.L": (35, 0, 0), "Shin.L": (-55, 0, 0), "Thigh.R": (35, 0, 0), "Shin.R": (-55, 0, 0), "Spine": (18, 0, 0),
+            (1, {"Thigh.L": (42, 0, 0), "Shin.L": (-55, 0, 0), "Thigh.R": (42, 0, 0), "Shin.R": (-55, 0, 0), "Spine": (20, 0, 0),
                  "EyeCamera": (4.0, -2.0, 0.0), "EyeCamera_loc": (0.0, -0.02, 0.02)}, (0, 0, 0)),
-            (13, {"Thigh.L": (92, 0, -6), "Shin.L": (-8, 0, 0), "Thigh.R": (92, 0, 6), "Shin.R": (-8, 0, 0),
-                  "Spine": (32, 0, 0), "UpperArm.L": (25, 0, 35), "UpperArm.R": (20, 0, -35),
+            (13, {"Thigh.L": (98, 0, -6), "Shin.L": (-6, 0, 0), "Thigh.R": (98, 0, 6), "Shin.R": (-6, 0, 0),
+                  "Spine": (34, 0, 0), "UpperArm.L": (25, 0, 35), "UpperArm.R": (20, 0, -35),
                   "EyeCamera": (14.5, -5.5, 0.0), "EyeCamera_loc": (0.0, -0.08, -0.06)}, (0, -0.10, -0.08)),
-            (37, {"Thigh.L": (86, 0, -5), "Shin.L": (-14, 0, 0), "Thigh.R": (86, 0, 5), "Shin.R": (-14, 0, 0),
+            (37, {"Thigh.L": (92, 0, -5), "Shin.L": (-12, 0, 0), "Thigh.R": (92, 0, 5), "Shin.R": (-12, 0, 0),
                   "Spine": (28, 0, 0), "UpperArm.L": (20, 0, 28), "UpperArm.R": (18, 0, -28),
                   "EyeCamera": (11.0, -4.0, 0.0), "EyeCamera_loc": (0.0, -0.06, -0.08)}, (0, -0.08, -0.10)),
             (97, {"Thigh.L": (0, 0, 0), "Shin.L": (0, 0, 0), "Thigh.R": (0, 0, 0), "Shin.R": (0, 0, 0), "Spine": (0, 0, 0),
                   "EyeCamera": (0.0, 0.0, 0.0), "EyeCamera_loc": (0.0, 0.0, 0.0)}, (0, 0, 0)),
+        ],
+        # jump_air: FPP_Unarmed_Jump_Begin 0..20 @ 30fps = 0.667s (81 frames)
+        "jump_air": [
+            (1, {"Chest": (-6, 0, 0), "UpperArm.L": (24, 0, 14), "Forearm.L": (18, 0, 0), "UpperArm.R": (14, 0, -8),
+                 "Thigh.L": (36, 0, 0), "Shin.L": (-55, 0, 0), "Thigh.R": (18, 0, 0), "Shin.R": (-35, 0, 0),
+                 "EyeCamera": (-2.0, 0.0, 0.0), "EyeCamera_loc": (0.0, 0.0, 0.015)}, (0, 0, 0.02)),
+            (41, {"Chest": (-4, 0, 0), "UpperArm.L": (28, 0, 18), "Forearm.L": (22, 0, 0), "UpperArm.R": (18, 0, -10),
+                  "Thigh.L": (28, 0, 0), "Shin.L": (-42, 0, 0), "Thigh.R": (26, 0, 0), "Shin.R": (-42, 0, 0),
+                  "EyeCamera": (0.5, 0.0, 0.0), "EyeCamera_loc": (0.0, 0.0, 0.0)}, (0, 0, 0.0)),
+            (81, {"Chest": (-4, 0, 0), "UpperArm.L": (26, 0, 16), "Forearm.L": (20, 0, 0), "UpperArm.R": (16, 0, -8),
+                  "Thigh.L": (22, 0, 0), "Shin.L": (-32, 0, 0), "Thigh.R": (22, 0, 0), "Shin.R": (-32, 0, 0),
+                  "EyeCamera": (1.5, 0.0, 0.0), "EyeCamera_loc": (0.0, 0.0, -0.01)}, (0, 0, -0.01)),
         ],
         # climb_ledge: FPP_Unarmed_RoofJump2_FromBottomNoHang 10..39 @ 40fps = 0.725s (88 frames), ENABLE_DUCK @ 0.463s (f57)
         "climb_ledge": [
@@ -756,12 +807,12 @@ def build_fpp_player() -> tuple[bpy.types.Object, bpy.types.Object, str]:
         ],
         # slide: FPP_Unarmed_SlideLoop 12 @ 30fps = 0.400s (49 frames)
         "slide": [
-            (1, {"Hips": (25, 0, 0), "Thigh.R": (75, 0, 0), "Shin.R": (-10, 0, 0), "Thigh.L": (45, 0, 0), "Shin.L": (-85, 0, 0),
+            (1, {"Hips": (28, 0, 0), "Thigh.R": (82, 0, 0), "Shin.R": (-8, 0, 0), "Foot.R": (-18, 0, 0), "Thigh.L": (48, 0, 0), "Shin.L": (-88, 0, 0),
                  "UpperArm.L": (28, 0, 20), "UpperArm.R": (-10, 0, -15),
-                 "EyeCamera": (4.0, -8.5, 2.0), "EyeCamera_loc": (0.0, -0.05, -0.35)}, (0, -0.10, -0.52)),
-            (49, {"Hips": (25, 0, 0), "Thigh.R": (75, 0, 0), "Shin.R": (-10, 0, 0), "Thigh.L": (45, 0, 0), "Shin.L": (-85, 0, 0),
+                 "EyeCamera": (4.0, -8.5, 2.0), "EyeCamera_loc": (0.0, -0.05, -0.35)}, (0, -0.18, -0.52)),
+            (49, {"Hips": (28, 0, 0), "Thigh.R": (82, 0, 0), "Shin.R": (-8, 0, 0), "Foot.R": (-18, 0, 0), "Thigh.L": (48, 0, 0), "Shin.L": (-88, 0, 0),
                   "UpperArm.L": (28, 0, 20), "UpperArm.R": (-10, 0, -15),
-                  "EyeCamera": (4.0, -8.5, 2.0), "EyeCamera_loc": (0.0, -0.05, -0.35)}, (0, -0.10, -0.52)),
+                  "EyeCamera": (4.0, -8.5, 2.0), "EyeCamera_loc": (0.0, -0.05, -0.35)}, (0, -0.18, -0.52)),
         ],
         # dodge_left: FPP_Unarmed_DodgeLeft 0..30 @ 40fps = 0.750s (91 frames)
         "dodge_left": [

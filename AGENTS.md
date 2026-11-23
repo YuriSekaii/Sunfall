@@ -13,3 +13,6 @@ Follow these rules on every task in this repository:
    - `--headless --script res://tests/verify_prototype.gd` (must print `ALL CHECKS PASSED` and exit `0`).
 5. **Save mechanic exploration reports to `report/`**:
    - Report to `C:\Users\Admin\Desktop\Code\SelfMadeProduct\Game\Sunfall\report` (`report/`) for all insights and findings when exploring Dying Light, 7 Days to Die (7D2D), or The Forest game mechanics.
+6. **Read actual reference game files directly before implementing or tuning mechanics** (never guess or invent parameters):
+   - **Dying Light 1**: `D:\Program File\Dying.Light.v1.54.0_LinkNeverDie.Com.part3\Dying.Light.v1.54.0_LinkNeverDie.Com` (`DW/Data0.pak`..`Data3.pak`, `DW/Data/*.rpack`, `gamedll_x64_rwdi.dll`, `engine_x64_rwdi.dll`).
+   - **7 Days to Die**: `D:\Program File\7.Days.To.Die.v3.3.0\7.Days.To.Die.v3.3.0\game`.
