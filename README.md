@@ -134,7 +134,9 @@ Sunfall/
 │   ├── loot_container.gd             # Interactive crates + Survivor Sense highlights
 │   ├── loot_table.gd                 # Seeded deterministic loot & weapon tier stats
 │   ├── ref_assets.gd                 # Manifest-driven GLB/texture/audio/icon loader with fallbacks
-│   └── sfx.gd                        # Audio playback with procedural 16-bit PCM synth fallback
+│   ├── sfx.gd                        # Audio playback with procedural 16-bit PCM synth fallback
+│   ├── dl_reference.gd               # Dying Light 1 Data0.pak tuning constants & PASS/FAIL spec evaluator
+│   └── dl_telemetry.gd               # 60Hz movement ring-buffer, transition log, F3 scorecard & JSON dump
 ├── tests/
 │   └── verify_prototype.gd           # Headless SceneTree verification suite
 └── assets_ref/                       # (.gitignore) Local extracted 3D/audio/icon assets
