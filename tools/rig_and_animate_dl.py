@@ -78,7 +78,7 @@ def build_humanoid_armature(
         eb = arm_data.edit_bones.new(bname)
         eb.head = Vector(head)
         eb.tail = Vector(tail)
-        if bname == "WeaponSocket":
+        if bname in ("WeaponSocket", "EyeCamera"):
             eb.align_roll(Vector((0.0, -1.0, 0.0)))
         if parent and parent in edit_bones:
             eb.parent = edit_bones[parent]
@@ -231,7 +231,8 @@ def bake_nla_action(
     bpy.context.view_layer.objects.active = arm_obj
     bpy.ops.object.mode_set(mode="POSE")
 
-    for frame, bone_rots, hips_loc in keyframes:
+    for raw_frame, bone_rots, hips_loc in keyframes:
+        frame = raw_frame - 1
         bpy.context.scene.frame_set(frame)
         for pb in arm_obj.pose.bones:
             pb.rotation_mode = "XYZ"
@@ -240,12 +241,24 @@ def bake_nla_action(
         if hips_loc is not None and "Hips" in arm_obj.pose.bones:
             arm_obj.pose.bones["Hips"].location = Vector(hips_loc)
             arm_obj.pose.bones["Hips"].keyframe_insert(data_path="location", frame=frame)
+        eye_loc = bone_rots.get("EyeCamera_loc")
+        if eye_loc is not None and "EyeCamera" in arm_obj.pose.bones:
+            pb_eye = arm_obj.pose.bones["EyeCamera"]
+            b_rest_eye = pb_eye.bone.matrix_local.to_3x3()
+            pb_eye.location = b_rest_eye.transposed() @ Vector(eye_loc)
+            pb_eye.keyframe_insert(data_path="location", frame=frame)
+        elif "EyeCamera" in arm_obj.pose.bones:
+            arm_obj.pose.bones["EyeCamera"].keyframe_insert(data_path="location", frame=frame)
         for bname, (rx, ry, rz) in bone_rots.items():
+            if bname == "EyeCamera_loc":
+                continue
             if bname in arm_obj.pose.bones:
                 pb = arm_obj.pose.bones[bname]
                 set_bone_world_rot(pb, rx, ry, rz)
                 pb.keyframe_insert(data_path="rotation_euler", frame=frame)
-        # Ensure Hips always has a rotation keyframe on frame 1 so track initializes cleanly
+        if "EyeCamera" in arm_obj.pose.bones and "EyeCamera" not in bone_rots:
+            arm_obj.pose.bones["EyeCamera"].keyframe_insert(data_path="rotation_euler", frame=frame)
+        # Ensure Hips always has a rotation keyframe on frame 0 so track initializes cleanly
         if "Hips" in arm_obj.pose.bones and "Hips" not in bone_rots:
             arm_obj.pose.bones["Hips"].keyframe_insert(data_path="rotation_euler", frame=frame)
 
@@ -253,9 +266,9 @@ def bake_nla_action(
 
     trk = arm_obj.animation_data.nla_tracks.new()
     trk.name = name
-    end_frame = max(k[0] for k in keyframes)
-    strip = trk.strips.new(name, 1, act)
-    strip.action_frame_start = 1
+    end_frame = max(k[0] - 1 for k in keyframes)
+    strip = trk.strips.new(name, 0, act)
+    strip.action_frame_start = 0
     strip.action_frame_end = end_frame
     arm_obj.animation_data.action = None
 
@@ -384,8 +397,8 @@ def add_rounded_box(
     bm_objs.append(ob)
 
 
-def build_fpp_player() -> tuple[bpy.types.Object, bpy.types.Object]:
-    """Generate clean textured FPP survivor body (no head/neck; grounded FPP arm/weapon framing + legs/boots)."""
+def _build_procedural_fpp_mesh() -> bpy.types.Object:
+    """Fallback procedural FPP survivor body if real player_dieselpunk_fpp extraction is unavailable."""
     mat_jacket = make_mat("SurvivorJacket", (0.21, 0.24, 0.19), 0.84)
     mat_cuff = make_mat("SurvivorCuff", (0.15, 0.16, 0.14), 0.86)
     mat_skin = make_mat("SurvivorSkin", (0.64, 0.46, 0.36), 0.68)
@@ -394,40 +407,31 @@ def build_fpp_player() -> tuple[bpy.types.Object, bpy.types.Object]:
     mat_boot = make_mat("SurvivorBoot", (0.11, 0.08, 0.06), 0.70)
 
     parts: list[bpy.types.Object] = []
-
-    # Torso shifted slightly back (-0.07 Y) so camera at (0, 0, 1.56) sees legs/chest cleanly without clipping
     add_limb_capsule(parts, (0.0, -0.07, 0.88), (0.0, -0.07, 1.12), 0.142, mat_jacket, 0.150)
     add_limb_capsule(parts, (0.0, -0.07, 1.10), (0.0, -0.07, 1.39), 0.155, mat_jacket, 0.165)
-    add_rounded_box(parts, (0.0, -0.07, 0.91), (0.30, 0.24, 0.06), mat_boot)  # tactical belt
+    add_rounded_box(parts, (0.0, -0.07, 0.91), (0.30, 0.24, 0.06), mat_boot)
 
-    # Legs + articulated Boots (Z=0.0..0.90)
-    for side_x in (-0.105, 0.105):
-        add_limb_capsule(parts, (side_x, -0.06, 0.90), (side_x, -0.02, 0.48), 0.085, mat_jeans, 0.068)
-        add_limb_capsule(parts, (side_x, -0.02, 0.48), (side_x, -0.04, 0.10), 0.068, mat_jeans, 0.055)
-        add_limb_capsule(parts, (side_x, -0.04, 0.16), (side_x, -0.03, 0.04), 0.060, mat_boot, 0.058)
+    for side_x in (-0.12, 0.12):
+        add_limb_capsule(parts, (side_x, -0.06, 0.90), (side_x, -0.03, 0.48), 0.085, mat_jeans, 0.068)
+        add_limb_capsule(parts, (side_x, -0.03, 0.48), (side_x, -0.06, 0.10), 0.068, mat_jeans, 0.055)
+        add_limb_capsule(parts, (side_x, -0.06, 0.16), (side_x, -0.05, 0.04), 0.060, mat_boot, 0.058)
         add_rounded_box(parts, (side_x, 0.04, 0.05), (0.105, 0.22, 0.09), mat_boot)
 
-    # Arms framed naturally inside Camera3D FOV 72deg at (0, 0, 1.56):
-    # Hand.R at (+0.21, +0.44, 1.36) -> Godot (+0.21 right, -0.20 down, -0.44 forward)
-    # Hand.L at (-0.23, +0.42, 1.34) -> Godot (-0.23 left, -0.22 down, -0.42 forward)
     arm_pose = {
-        "L": ((-0.18, -0.06, 1.36), (-0.27, 0.16, 1.15), (-0.23, 0.42, 1.34), (-0.20, 0.51, 1.37)),
-        "R": ((0.18, -0.06, 1.36), (0.26, 0.17, 1.15), (0.21, 0.44, 1.36), (0.19, 0.53, 1.39)),
+        "L": ((-0.18, -0.06, 1.36), (-0.27, 0.18, 1.18), (-0.23, 0.38, 1.33), (-0.20, 0.49, 1.36)),
+        "R": ((0.18, -0.06, 1.36), (0.26, 0.19, 1.18), (0.21, 0.40, 1.35), (0.19, 0.51, 1.38)),
     }
     for side, (sh, el, wr, fg) in arm_pose.items():
         add_limb_capsule(parts, sh, el, 0.058, mat_jacket, 0.048)
         add_limb_capsule(parts, el, wr, 0.045, mat_skin, 0.034)
-        # Rolled sleeve cuff near elbow + wrist wrap
         cuff_p0 = tuple(el[i] + (wr[i] - el[i]) * 0.12 for i in range(3))
         add_limb_capsule(parts, el, cuff_p0, 0.050, mat_cuff, 0.048)
-        # Gloved palm + thumb + curled finger grip
         palm_loc = tuple((wr[i] + fg[i]) * 0.5 for i in range(3))
         add_rounded_box(parts, palm_loc, (0.058, 0.095, 0.068), mat_glove)
         sgn = -1.0 if side == "L" else 1.0
         add_rounded_box(parts, (palm_loc[0] - sgn * 0.032, palm_loc[1] + 0.015, palm_loc[2] + 0.024), (0.026, 0.055, 0.026), mat_glove)
         add_rounded_box(parts, (fg[0], fg[1] + 0.01, fg[2] - 0.01), (0.052, 0.036, 0.048), mat_skin)
 
-    # Join all parts into one clean FPP mesh
     bpy.ops.object.select_all(action="DESELECT")
     for p in parts:
         p.select_set(True)
@@ -435,18 +439,29 @@ def build_fpp_player() -> tuple[bpy.types.Object, bpy.types.Object]:
     bpy.ops.object.join()
     mesh_obj = bpy.context.active_object
     mesh_obj.name = "dl_player_fpp_mesh"
+    return mesh_obj
 
-    sh_l, el_l, wr_l, fg_l = arm_pose["L"]
-    sh_r, el_r, wr_r, fg_r = arm_pose["R"]
+
+def build_fpp_player() -> tuple[bpy.types.Object, bpy.types.Object, str]:
+    """Rig real Dying Light 1 player_dieselpunk_fpp mesh (with EyeCamera + WeaponSocket & exact DL1 timelines)."""
+    bpy.context.scene.render.fps = 120
+
+    arm_pose_fpp = {
+        "L": ((-0.18, -0.06, 1.36), (-0.27, 0.18, 1.18), (-0.23, 0.38, 1.33), (-0.20, 0.49, 1.36)),
+        "R": ((0.18, -0.06, 1.36), (0.26, 0.19, 1.18), (0.21, 0.40, 1.35), (0.19, 0.51, 1.38)),
+    }
+    sh_l, el_l, wr_l, fg_l = arm_pose_fpp["L"]
+    sh_r, el_r, wr_r, fg_r = arm_pose_fpp["R"]
     ws_head = (wr_r[0] - 0.01, (wr_r[1] + fg_r[1]) * 0.5 + 0.01, (wr_r[2] + fg_r[2]) * 0.5)
     ws_tail = (ws_head[0] - 0.025, ws_head[1] + 0.065, ws_head[2] + 0.165)
 
-    bones = [
+    bones_fpp = [
         ("Hips", (0.0, -0.07, 0.88), (0.0, -0.07, 1.02), None),
         ("Spine", (0.0, -0.07, 1.02), (0.0, -0.07, 1.20), "Hips"),
         ("Chest", (0.0, -0.07, 1.20), (0.0, -0.07, 1.39), "Spine"),
         ("Neck", (0.0, -0.07, 1.39), (0.0, -0.07, 1.46), "Chest"),
         ("Head", (0.0, -0.07, 1.46), (0.0, -0.07, 1.56), "Neck"),
+        ("EyeCamera", (0.0, 0.0, 1.56), (0.0, 0.0, 1.68), "Head"),
         ("Clavicle.L", (-0.05, -0.06, 1.37), sh_l, "Chest"),
         ("UpperArm.L", sh_l, el_l, "Clavicle.L"),
         ("Forearm.L", el_l, wr_l, "UpperArm.L"),
@@ -456,185 +471,482 @@ def build_fpp_player() -> tuple[bpy.types.Object, bpy.types.Object]:
         ("Forearm.R", el_r, wr_r, "UpperArm.R"),
         ("Hand.R", wr_r, fg_r, "Forearm.R"),
         ("WeaponSocket", ws_head, ws_tail, "Hand.R"),
-        ("Thigh.L", (-0.105, -0.06, 0.88), (-0.105, -0.02, 0.48), "Hips"),
-        ("Shin.L", (-0.105, -0.02, 0.48), (-0.105, -0.04, 0.10), "Thigh.L"),
-        ("Foot.L", (-0.105, -0.04, 0.10), (-0.105, 0.11, 0.02), "Shin.L"),
-        ("Thigh.R", (0.105, -0.06, 0.88), (0.105, -0.02, 0.48), "Hips"),
-        ("Shin.R", (0.105, -0.02, 0.48), (0.105, -0.04, 0.10), "Thigh.R"),
-        ("Foot.R", (0.105, -0.04, 0.10), (0.105, 0.11, 0.02), "Shin.R"),
+        ("Thigh.L", (-0.12, -0.06, 0.88), (-0.15, -0.03, 0.48), "Hips"),
+        ("Shin.L", (-0.15, -0.03, 0.48), (-0.18, -0.06, 0.10), "Thigh.L"),
+        ("Foot.L", (-0.18, -0.06, 0.10), (-0.18, 0.10, 0.02), "Shin.L"),
+        ("Thigh.R", (0.12, -0.06, 0.88), (0.15, -0.03, 0.48), "Hips"),
+        ("Shin.R", (0.15, -0.03, 0.48), (0.18, -0.06, 0.10), "Thigh.R"),
+        ("Foot.R", (0.18, -0.06, 0.10), (0.18, 0.10, 0.02), "Shin.R"),
     ]
-    arm_obj = build_humanoid_armature("dl_player_fpp", bones)
-    skin_method = bind_mesh_to_armature(mesh_obj, arm_obj, exclude_bones={"WeaponSocket"})
-    print(f"FPP player skinned via {skin_method}, verts={len(mesh_obj.data.vertices)}")
 
+    fpp_obj_path = DL_MODELS / "dl_player_fpp" / "dl_player_fpp.obj"
+    mesh_source = "procedural_fallback"
+    mesh_obj = None
+
+    if fpp_obj_path.exists():
+        try:
+            mesh_obj = import_obj_facing_pos_y(fpp_obj_path)
+            mesh_obj.name = "dl_player_fpp_mesh"
+            if len(mesh_obj.data.vertices) >= 14000:
+                mesh_source = "player_dieselpunk_fpp"
+        except Exception as exc:
+            print(f"WARN: Failed loading {fpp_obj_path}: {exc}")
+            mesh_obj = None
+
+    if mesh_obj is not None and mesh_source == "player_dieselpunk_fpp":
+        # Categorize vertices by submesh material: 0=hands, 1=watch, 2=legs, 3=torso
+        v_cat = np.full(len(mesh_obj.data.vertices), 3, dtype=np.int32)
+        for poly in mesh_obj.data.polygons:
+            mi = poly.material_index
+            for vi in poly.vertices:
+                if mi in (0, 1) or v_cat[vi] not in (0, 1):
+                    v_cat[vi] = mi
+
+        # Shift trunk & legs slightly back (-0.07 Y) and keep collar below camera at (0, 0, 1.56)
+        for vi, v in enumerate(mesh_obj.data.vertices):
+            if v_cat[vi] == 2:
+                v.co.y -= 0.06
+            elif v_cat[vi] == 3 and abs(v.co.x) < 0.22:
+                w_trunk = max(0.0, min(1.0, (0.22 - abs(v.co.x)) / 0.08))
+                v.co.y -= 0.07 * w_trunk
+                if v.co.z > 1.36:
+                    v.co.z = 1.36 + (v.co.z - 1.36) * (1.0 - 0.75 * w_trunk)
+
+        # Native A-pose deform bones of player_dieselpunk_fpp
+        bones_a = [
+            ("Hips", (0.0, -0.07, 0.88), (0.0, -0.07, 1.02)),
+            ("Spine", (0.0, -0.07, 1.02), (0.0, -0.07, 1.20)),
+            ("Chest", (0.0, -0.07, 1.20), (0.0, -0.07, 1.39)),
+            ("Clavicle.L", (-0.05, -0.06, 1.37), (-0.18, -0.01, 1.38)),
+            ("UpperArm.L", (-0.18, -0.01, 1.38), (-0.37, 0.11, 1.16)),
+            ("Forearm.L", (-0.37, 0.11, 1.16), (-0.42, 0.25, 1.06)),
+            ("Hand.L", (-0.42, 0.25, 1.06), (-0.41, 0.35, 0.95)),
+            ("Clavicle.R", (0.05, -0.06, 1.37), (0.18, -0.01, 1.38)),
+            ("UpperArm.R", (0.18, -0.01, 1.38), (0.37, 0.11, 1.16)),
+            ("Forearm.R", (0.37, 0.11, 1.16), (0.42, 0.25, 1.06)),
+            ("Hand.R", (0.42, 0.25, 1.06), (0.41, 0.35, 0.95)),
+            ("Thigh.L", (-0.12, -0.06, 0.88), (-0.15, -0.03, 0.48)),
+            ("Shin.L", (-0.15, -0.03, 0.48), (-0.18, -0.06, 0.10)),
+            ("Foot.L", (-0.18, -0.06, 0.10), (-0.18, 0.10, 0.02)),
+            ("Thigh.R", (0.12, -0.06, 0.88), (0.15, -0.03, 0.48)),
+            ("Shin.R", (0.15, -0.03, 0.48), (0.18, -0.06, 0.10)),
+            ("Foot.R", (0.18, -0.06, 0.10), (0.18, 0.10, 0.02)),
+        ]
+        fpp_lookup = {b[0]: (b[1], b[2]) for b in bones_fpp}
+        bnames = [b[0] for b in bones_a]
+        heads_a = np.array([b[1] for b in bones_a], dtype=np.float32)
+        tails_a = np.array([b[2] for b in bones_a], dtype=np.float32)
+        seg = tails_a - heads_a
+        seg_len2 = np.maximum(np.sum(seg * seg, axis=1), 1e-8)
+
+        verts = np.array([v.co[:] for v in mesh_obj.data.vertices], dtype=np.float32)
+        diff = verts[:, None, :] - heads_a[None, :, :]
+        t = np.clip(np.sum(diff * seg[None, :, :], axis=2) / seg_len2[None, :], 0.0, 1.0)
+        proj = heads_a[None, :, :] + t[:, :, None] * seg[None, :, :]
+        dist2 = np.sum((verts[:, None, :] - proj) ** 2, axis=2)
+
+        bone_x = 0.5 * (heads_a[:, 0] + tails_a[:, 0])
+        vx = verts[:, 0:1]
+        dist2[:, bone_x < -0.04] += np.where(vx > 0.0, 100.0, 0.0)
+        dist2[:, bone_x > 0.04] += np.where(vx < 0.0, 100.0, 0.0)
+
+        arm_mask = np.array([n in ("UpperArm.L", "Forearm.L", "Hand.L", "UpperArm.R", "Forearm.R", "Hand.R") for n in bnames])
+        leg_mask = np.array([n in ("Hips", "Thigh.L", "Shin.L", "Foot.L", "Thigh.R", "Shin.R", "Foot.R") for n in bnames])
+        sleeve_mask = np.array([n in ("Chest", "Clavicle.L", "UpperArm.L", "Forearm.L", "Clavicle.R", "UpperArm.R", "Forearm.R") for n in bnames])
+        trunk_mask = np.array([n in ("Hips", "Spine", "Chest", "Clavicle.L", "Clavicle.R") for n in bnames])
+
+        is_hand_v = (v_cat == 0) | (v_cat == 1)
+        is_leg_v = (v_cat == 2)
+        is_sleeve_v = (v_cat == 3) & (np.abs(verts[:, 0]) > 0.21)
+        is_trunk_v = (v_cat == 3) & (np.abs(verts[:, 0]) <= 0.21)
+
+        dist2[np.ix_(is_hand_v, ~arm_mask)] += 100.0
+        dist2[np.ix_(is_leg_v, ~leg_mask)] += 100.0
+        dist2[np.ix_(is_sleeve_v, ~sleeve_mask)] += 100.0
+        dist2[np.ix_(is_trunk_v, ~trunk_mask)] += 100.0
+
+        sigmas = np.array([0.10 if n in ("Hips", "Spine", "Chest") else 0.055 for n in bnames], dtype=np.float32)
+        weights = np.exp(-dist2 / (sigmas[None, :] ** 2))
+        top_idx = np.argpartition(-weights, kth=3, axis=1)[:, :4]
+        top_w = np.take_along_axis(weights, top_idx, axis=1)
+        top_sum = np.sum(top_w, axis=1, keepdims=True)
+        zero_m = top_sum[:, 0] < 1e-7
+        if np.any(zero_m):
+            nearest = np.argmin(dist2[zero_m], axis=1)
+            top_idx[zero_m, :] = 0
+            top_w[zero_m, :] = 0.0
+            top_idx[zero_m, 0] = nearest
+            top_w[zero_m, 0] = 1.0
+            top_sum = np.sum(top_w, axis=1, keepdims=True)
+        top_w /= top_sum
+
+        rot_mats = np.zeros((len(bnames), 3, 3), dtype=np.float32)
+        heads_fpp = np.zeros((len(bnames), 3), dtype=np.float32)
+        for bi, bname in enumerate(bnames):
+            ha, ta = Vector(bones_a[bi][1]), Vector(bones_a[bi][2])
+            hf, tf = Vector(fpp_lookup[bname][0]), Vector(fpp_lookup[bname][1])
+            da = (ta - ha).normalized()
+            df = (tf - hf).normalized()
+            q = da.rotation_difference(df)
+            rot_mats[bi] = np.array(q.to_matrix(), dtype=np.float32)
+            heads_fpp[bi] = np.array(hf[:], dtype=np.float32)
+
+        new_verts = np.zeros_like(verts)
+        for k in range(4):
+            bi = top_idx[:, k]
+            wk = top_w[:, k : k + 1]
+            rel = verts - heads_a[bi]
+            rot_rel = np.einsum("vij,vj->vi", rot_mats[bi], rel)
+            new_verts += wk * (rot_rel + heads_fpp[bi])
+
+        mesh_obj.data.vertices.foreach_set("co", new_verts.ravel())
+        mesh_obj.data.update()
+
+        arm_obj = build_humanoid_armature("dl_player_fpp", bones_fpp)
+        mesh_obj.parent = arm_obj
+        mod = mesh_obj.modifiers.new(name="Armature", type="ARMATURE")
+        mod.object = arm_obj
+        mesh_obj.vertex_groups.clear()
+        vgroups = [mesh_obj.vertex_groups.new(name=n) for n in bnames]
+        for vi in range(len(new_verts)):
+            for k in range(4):
+                w = float(top_w[vi, k])
+                if w > 1e-4:
+                    vgroups[int(top_idx[vi, k])].add([vi], w, "REPLACE")
+        print(f"FPP player rigged from REAL {mesh_source}, verts={len(mesh_obj.data.vertices)}")
+    else:
+        mesh_obj = _build_procedural_fpp_mesh()
+        arm_obj = build_humanoid_armature("dl_player_fpp", bones_fpp)
+        skin_method = bind_mesh_to_armature(
+            mesh_obj, arm_obj, exclude_bones={"WeaponSocket", "EyeCamera", "Neck", "Head"}
+        )
+        print(f"FPP player skinned via {skin_method} ({mesh_source}), verts={len(mesh_obj.data.vertices)}")
+
+    # Exact Dying Light 1 SeqTrack durations & Event beats at 120 FPS (frame = 1 + round(sec * 120))
+    # Plus authentic EyeCamera pitch/roll/yaw (rx, ry, rz deg) & EyeCamera_loc (dx, dy, dz m) curves
     anims = {
+        # idle: 1.600s (193 frames)
         "idle": [
-            (1, {"UpperArm.R": (0, 0, 0), "Forearm.R": (0, 0, 0), "UpperArm.L": (0, 0, 0)}, (0, 0, 0)),
-            (24, {"UpperArm.R": (2, 0, 0), "Forearm.R": (3, 0, 0), "UpperArm.L": (2, 0, 0)}, (0, 0, -0.008)),
-            (48, {"UpperArm.R": (0, 0, 0), "Forearm.R": (0, 0, 0), "UpperArm.L": (0, 0, 0)}, (0, 0, 0)),
+            (1, {"UpperArm.R": (0, 0, 0), "Forearm.R": (0, 0, 0), "UpperArm.L": (0, 0, 0),
+                 "EyeCamera": (0.0, 0.0, 0.0), "EyeCamera_loc": (0.0, 0.0, 0.0)}, (0, 0, 0)),
+            (97, {"UpperArm.R": (2, 0, 0), "Forearm.R": (3, 0, 0), "UpperArm.L": (2, 0, 0),
+                  "EyeCamera": (0.6, 0.2, 0.0), "EyeCamera_loc": (0.0, 0.0, -0.005)}, (0, 0, -0.008)),
+            (193, {"UpperArm.R": (0, 0, 0), "Forearm.R": (0, 0, 0), "UpperArm.L": (0, 0, 0),
+                   "EyeCamera": (0.0, 0.0, 0.0), "EyeCamera_loc": (0.0, 0.0, 0.0)}, (0, 0, 0)),
         ],
+        # walk: FPP_Unarmed_WalkForward 0..53 @ 60fps = 0.883s (107 frames), STEP_R @ 0.267s (f33), STEP_L @ 0.700s (f85)
         "walk": [
-            (1, {"UpperArm.R": (5, 0, -2), "UpperArm.L": (-8, 0, 0), "Thigh.L": (22, 0, 0), "Shin.L": (-26, 0, 0), "Thigh.R": (-16, 0, 0)}, (0, 0, -0.02)),
-            (14, {"UpperArm.R": (-6, 0, 2), "UpperArm.L": (10, 0, 0), "Thigh.L": (-16, 0, 0), "Thigh.R": (22, 0, 0), "Shin.R": (-26, 0, 0)}, (0, 0, 0.01)),
-            (28, {"UpperArm.R": (5, 0, -2), "UpperArm.L": (-8, 0, 0), "Thigh.L": (22, 0, 0), "Shin.L": (-26, 0, 0), "Thigh.R": (-16, 0, 0)}, (0, 0, -0.02)),
+            (1, {"UpperArm.R": (5, 0, -2), "UpperArm.L": (-8, 0, 0), "Thigh.L": (22, 0, 0), "Shin.L": (-26, 0, 0), "Thigh.R": (-16, 0, 0),
+                 "EyeCamera": (-0.6, 0.8, 0.0), "EyeCamera_loc": (0.0, 0.0, -0.010)}, (0, 0, -0.02)),
+            (33, {"UpperArm.R": (2, 0, -1), "UpperArm.L": (-2, 0, 0), "Thigh.L": (6, 0, 0), "Shin.L": (-10, 0, 0), "Thigh.R": (4, 0, 0),
+                  "EyeCamera": (-1.2, 1.4, -0.4), "EyeCamera_loc": (0.005, 0.0, -0.018)}, (0, 0, -0.025)),
+            (54, {"UpperArm.R": (-6, 0, 2), "UpperArm.L": (10, 0, 0), "Thigh.L": (-16, 0, 0), "Thigh.R": (22, 0, 0), "Shin.R": (-26, 0, 0),
+                  "EyeCamera": (0.5, -0.6, 0.0), "EyeCamera_loc": (0.0, 0.0, 0.006)}, (0, 0, 0.01)),
+            (85, {"UpperArm.R": (-1, 0, 1), "UpperArm.L": (3, 0, 0), "Thigh.L": (4, 0, 0), "Thigh.R": (6, 0, 0), "Shin.R": (-10, 0, 0),
+                  "EyeCamera": (-1.2, -1.4, 0.4), "EyeCamera_loc": (-0.005, 0.0, -0.018)}, (0, 0, -0.025)),
+            (107, {"UpperArm.R": (5, 0, -2), "UpperArm.L": (-8, 0, 0), "Thigh.L": (22, 0, 0), "Shin.L": (-26, 0, 0), "Thigh.R": (-16, 0, 0),
+                   "EyeCamera": (-0.6, 0.8, 0.0), "EyeCamera_loc": (0.0, 0.0, -0.010)}, (0, 0, -0.02)),
         ],
+        # sprint: FPP_Unarmed_SprintForward 0..34 @ 60fps = 0.567s (69 frames), STEP_R @ 0.167s (f21), STEP_L @ 0.450s (f55)
         "sprint": [
             (1, {"Chest": (-10, 0, 0), "UpperArm.R": (22, 0, 12), "Forearm.R": (25, 0, 0), "UpperArm.L": (-22, 0, -10),
-                 "Thigh.L": (42, 0, 0), "Shin.L": (-55, 0, 0), "Thigh.R": (-30, 0, 0)}, (0, 0, -0.04)),
-            (9, {"Chest": (-10, 0, 0), "UpperArm.R": (-18, 0, -10), "Forearm.R": (18, 0, 0), "UpperArm.L": (24, 0, 10),
-                 "Thigh.L": (-30, 0, 0), "Thigh.R": (42, 0, 0), "Shin.R": (-55, 0, 0)}, (0, 0, 0.02)),
-            (18, {"Chest": (-10, 0, 0), "UpperArm.R": (22, 0, 12), "Forearm.R": (25, 0, 0), "UpperArm.L": (-22, 0, -10),
-                  "Thigh.L": (42, 0, 0), "Shin.L": (-55, 0, 0), "Thigh.R": (-30, 0, 0)}, (0, 0, -0.04)),
+                 "Thigh.L": (42, 0, 0), "Shin.L": (-55, 0, 0), "Thigh.R": (-30, 0, 0),
+                 "EyeCamera": (-1.8, 2.2, -0.8), "EyeCamera_loc": (0.01, 0.0, -0.025)}, (0, 0, -0.04)),
+            (21, {"Chest": (-10, 0, 0), "UpperArm.R": (8, 0, 4), "Forearm.R": (20, 0, 0), "UpperArm.L": (-6, 0, -4),
+                  "Thigh.L": (12, 0, 0), "Shin.L": (-24, 0, 0), "Thigh.R": (10, 0, 0),
+                  "EyeCamera": (-3.2, 3.0, -1.2), "EyeCamera_loc": (0.015, 0.0, -0.038)}, (0, 0, -0.05)),
+            (35, {"Chest": (-10, 0, 0), "UpperArm.R": (-18, 0, -10), "Forearm.R": (18, 0, 0), "UpperArm.L": (24, 0, 10),
+                  "Thigh.L": (-30, 0, 0), "Thigh.R": (42, 0, 0), "Shin.R": (-55, 0, 0),
+                  "EyeCamera": (-0.8, -1.8, 0.8), "EyeCamera_loc": (-0.01, 0.0, 0.012)}, (0, 0, 0.02)),
+            (55, {"Chest": (-10, 0, 0), "UpperArm.R": (-4, 0, -2), "Forearm.R": (22, 0, 0), "UpperArm.L": (8, 0, 4),
+                  "Thigh.L": (10, 0, 0), "Thigh.R": (12, 0, 0), "Shin.R": (-24, 0, 0),
+                  "EyeCamera": (-3.2, -3.0, 1.2), "EyeCamera_loc": (-0.015, 0.0, -0.038)}, (0, 0, -0.05)),
+            (69, {"Chest": (-10, 0, 0), "UpperArm.R": (22, 0, 12), "Forearm.R": (25, 0, 0), "UpperArm.L": (-22, 0, -10),
+                  "Thigh.L": (42, 0, 0), "Shin.L": (-55, 0, 0), "Thigh.R": (-30, 0, 0),
+                  "EyeCamera": (-1.8, 2.2, -0.8), "EyeCamera_loc": (0.01, 0.0, -0.025)}, (0, 0, -0.04)),
         ],
+        # swing_right: FPP_Stick_Melee_Attack_RL_Empty 66..84 @ 30fps = 0.600s (73 frames), damage [0.093s..0.333s], CAMERA_ROLL -6 @ 0.20s
         "swing_right": [
-            (1, {"UpperArm.R": (25, -20, -28), "Forearm.R": (20, 0, 0), "Chest": (0, 0, -14)}, (0, 0, 0)),
-            (6, {"UpperArm.R": (48, 32, 48), "Forearm.R": (-20, 18, 22), "Hand.R": (18, 0, 18), "Chest": (-8, 0, 18)}, (0, 0.02, 0)),
-            (18, {"UpperArm.R": (0, 0, 0), "Forearm.R": (0, 0, 0), "Chest": (0, 0, 0)}, (0, 0, 0)),
+            (1, {"UpperArm.R": (25, -20, -28), "Forearm.R": (20, 0, 0), "Chest": (0, 0, -14),
+                 "EyeCamera": (1.5, 2.5, -2.5), "EyeCamera_loc": (0.0, -0.01, 0.0)}, (0, 0, 0)),
+            (12, {"UpperArm.R": (38, 12, 18), "Forearm.R": (-8, 10, 12), "Hand.R": (10, 0, 10), "Chest": (-4, 0, 6),
+                  "EyeCamera": (-1.5, -4.2, 2.5), "EyeCamera_loc": (0.0, 0.015, -0.01)}, (0, 0.01, 0)),
+            (25, {"UpperArm.R": (48, 32, 48), "Forearm.R": (-20, 18, 22), "Hand.R": (18, 0, 18), "Chest": (-8, 0, 18),
+                  "EyeCamera": (-2.8, -6.0, 4.8), "EyeCamera_loc": (-0.015, 0.025, -0.018)}, (0, 0.02, 0)),
+            (41, {"UpperArm.R": (32, 22, 34), "Forearm.R": (-12, 12, 14), "Hand.R": (10, 0, 10), "Chest": (-5, 0, 12),
+                  "EyeCamera": (-1.4, -3.2, 2.4), "EyeCamera_loc": (-0.008, 0.01, -0.01)}, (0, 0.01, 0)),
+            (73, {"UpperArm.R": (0, 0, 0), "Forearm.R": (0, 0, 0), "Hand.R": (0, 0, 0), "Chest": (0, 0, 0),
+                  "EyeCamera": (0.0, 0.0, 0.0), "EyeCamera_loc": (0.0, 0.0, 0.0)}, (0, 0, 0)),
         ],
+        # swing_left: FPP_Stick_Melee_Attack_LR_Empty 43..58 @ 30fps = 0.500s (61 frames), damage [0.083s..0.333s], CAMERA_ROLL +6 @ 0.20s
         "swing_left": [
-            (1, {"UpperArm.R": (25, 25, 38), "Forearm.R": (22, 0, 15), "Chest": (0, 0, 14)}, (0, 0, 0)),
-            (6, {"UpperArm.R": (40, -32, -42), "Forearm.R": (-20, -16, -20), "Hand.R": (18, 0, -18), "Chest": (-8, 0, -16)}, (0, 0.02, 0)),
-            (18, {"UpperArm.R": (0, 0, 0), "Forearm.R": (0, 0, 0), "Chest": (0, 0, 0)}, (0, 0, 0)),
+            (1, {"UpperArm.R": (25, 25, 38), "Forearm.R": (22, 0, 15), "Chest": (0, 0, 14),
+                 "EyeCamera": (1.5, -2.5, 2.5), "EyeCamera_loc": (0.0, -0.01, 0.0)}, (0, 0, 0)),
+            (13, {"UpperArm.R": (34, -14, -18), "Forearm.R": (-10, -8, -10), "Hand.R": (10, 0, -10), "Chest": (-4, 0, -6),
+                  "EyeCamera": (-1.5, 4.2, -2.5), "EyeCamera_loc": (0.0, 0.015, -0.01)}, (0, 0.01, 0)),
+            (25, {"UpperArm.R": (40, -32, -42), "Forearm.R": (-20, -16, -20), "Hand.R": (18, 0, -18), "Chest": (-8, 0, -16),
+                  "EyeCamera": (-2.5, 6.0, -4.8), "EyeCamera_loc": (0.015, 0.025, -0.018)}, (0, 0.02, 0)),
+            (41, {"UpperArm.R": (26, -20, -28), "Forearm.R": (-12, -10, -12), "Hand.R": (10, 0, -10), "Chest": (-4, 0, -10),
+                  "EyeCamera": (-1.2, 3.0, -2.2), "EyeCamera_loc": (0.008, 0.01, -0.01)}, (0, 0.01, 0)),
+            (61, {"UpperArm.R": (0, 0, 0), "Forearm.R": (0, 0, 0), "Hand.R": (0, 0, 0), "Chest": (0, 0, 0),
+                  "EyeCamera": (0.0, 0.0, 0.0), "EyeCamera_loc": (0.0, 0.0, 0.0)}, (0, 0, 0)),
         ],
+        # heavy_charge: ChargeHoldDuration = 0.500s (61 frames)
         "heavy_charge": [
-            (1, {"UpperArm.R": (0, 0, 0)}, (0, 0, 0)),
-            (12, {"UpperArm.R": (48, -28, -42), "Forearm.R": (35, 0, 0), "Chest": (10, 0, -22), "UpperArm.L": (18, 0, 14)}, (0, -0.03, 0)),
+            (1, {"UpperArm.R": (0, 0, 0), "EyeCamera": (0.0, 0.0, 0.0), "EyeCamera_loc": (0.0, 0.0, 0.0)}, (0, 0, 0)),
+            (61, {"UpperArm.R": (48, -28, -42), "Forearm.R": (35, 0, 0), "Chest": (10, 0, -22), "UpperArm.L": (18, 0, 14),
+                  "EyeCamera": (3.5, 4.0, -5.5), "EyeCamera_loc": (0.01, -0.02, -0.015)}, (0, -0.03, 0)),
         ],
+        # heavy_swing: FPP_Stick_Melee_Attack_CH_RL_Empty 55..110 @ 33fps = 1.667s (201 frames), damage [0.667s..0.879s] (f81..f106)
         "heavy_swing": [
-            (1, {"UpperArm.R": (48, -28, -42), "Forearm.R": (35, 0, 0), "Chest": (10, 0, -22)}, (0, -0.03, 0)),
-            (6, {"UpperArm.R": (38, 42, 62), "Forearm.R": (-28, 24, 28), "Hand.R": (24, 0, 22), "Chest": (-14, 0, 26)}, (0, 0.05, 0)),
-            (20, {"UpperArm.R": (0, 0, 0), "Forearm.R": (0, 0, 0), "Chest": (0, 0, 0)}, (0, 0, 0)),
+            (1, {"UpperArm.R": (48, -28, -42), "Forearm.R": (35, 0, 0), "Chest": (10, 0, -22),
+                 "EyeCamera": (3.5, 4.0, -5.5), "EyeCamera_loc": (0.01, -0.02, -0.015)}, (0, -0.03, 0)),
+            (59, {"UpperArm.R": (54, -32, -48), "Forearm.R": (38, 0, 0), "Chest": (12, 0, -26),
+                  "EyeCamera": (4.5, 5.0, -7.0), "EyeCamera_loc": (0.015, -0.025, -0.02)}, (0, -0.035, 0)),
+            (81, {"UpperArm.R": (38, 42, 62), "Forearm.R": (-28, 24, 28), "Hand.R": (24, 0, 22), "Chest": (-14, 0, 26),
+                  "EyeCamera": (-5.5, -9.5, 8.0), "EyeCamera_loc": (-0.025, 0.04, -0.035)}, (0, 0.05, 0)),
+            (106, {"UpperArm.R": (30, 34, 48), "Forearm.R": (-20, 18, 20), "Hand.R": (16, 0, 16), "Chest": (-10, 0, 20),
+                   "EyeCamera": (-4.0, -6.5, 5.5), "EyeCamera_loc": (-0.015, 0.025, -0.025)}, (0, 0.03, 0)),
+            (201, {"UpperArm.R": (0, 0, 0), "Forearm.R": (0, 0, 0), "Hand.R": (0, 0, 0), "Chest": (0, 0, 0),
+                   "EyeCamera": (0.0, 0.0, 0.0), "EyeCamera_loc": (0.0, 0.0, 0.0)}, (0, 0, 0)),
         ],
+        # kick: FPP_Unarmed_Kick 0..25 @ 40fps = 0.625s (76 frames), damage [0.250s..0.350s] (f31..f43)
         "kick": [
-            (1, {"Thigh.R": (18, 0, 0), "Shin.R": (-28, 0, 0), "UpperArm.R": (-8, 0, -8)}, (0, 0, 0)),
-            (8, {"Thigh.R": (88, 0, 0), "Shin.R": (-12, 0, 0), "Foot.R": (-22, 0, 0), "Spine": (12, 0, 0), "UpperArm.L": (16, 0, 16), "UpperArm.R": (-10, 0, -12)}, (0, -0.04, 0)),
-            (19, {"Thigh.R": (0, 0, 0), "Shin.R": (0, 0, 0), "Spine": (0, 0, 0)}, (0, 0, 0)),
+            (1, {"Thigh.R": (18, 0, 0), "Shin.R": (-28, 0, 0), "UpperArm.R": (-8, 0, -8),
+                 "EyeCamera": (-1.5, -1.0, 0.0), "EyeCamera_loc": (0.0, 0.0, -0.01)}, (0, 0, 0)),
+            (31, {"Thigh.R": (88, 0, 0), "Shin.R": (-12, 0, 0), "Foot.R": (-22, 0, 0), "Spine": (12, 0, 0),
+                  "UpperArm.L": (16, 0, 16), "UpperArm.R": (-10, 0, -12),
+                  "EyeCamera": (6.0, -3.5, 2.0), "EyeCamera_loc": (0.0, -0.03, -0.02)}, (0, -0.04, 0)),
+            (43, {"Thigh.R": (82, 0, 0), "Shin.R": (-16, 0, 0), "Foot.R": (-18, 0, 0), "Spine": (10, 0, 0),
+                  "UpperArm.L": (14, 0, 14), "UpperArm.R": (-8, 0, -10),
+                  "EyeCamera": (4.5, -2.5, 1.5), "EyeCamera_loc": (0.0, -0.025, -0.015)}, (0, -0.03, 0)),
+            (76, {"Thigh.R": (0, 0, 0), "Shin.R": (0, 0, 0), "Foot.R": (0, 0, 0), "Spine": (0, 0, 0),
+                  "EyeCamera": (0.0, 0.0, 0.0), "EyeCamera_loc": (0.0, 0.0, 0.0)}, (0, 0, 0)),
         ],
+        # dropkick: FPP_Unarmed_KickWrestling 10..34 @ 30fps = 0.800s (97 frames), damage [0.100s..0.300s] (f13..f37)
         "dropkick": [
-            (1, {"Thigh.L": (35, 0, 0), "Shin.L": (-55, 0, 0), "Thigh.R": (35, 0, 0), "Shin.R": (-55, 0, 0), "Spine": (18, 0, 0)}, (0, 0, 0)),
-            (8, {"Thigh.L": (92, 0, -6), "Shin.L": (-8, 0, 0), "Thigh.R": (92, 0, 6), "Shin.R": (-8, 0, 0),
-                 "Spine": (32, 0, 0), "UpperArm.L": (25, 0, 35), "UpperArm.R": (20, 0, -35)}, (0, -0.10, -0.08)),
-            (22, {"Thigh.L": (0, 0, 0), "Shin.L": (0, 0, 0), "Thigh.R": (0, 0, 0), "Shin.R": (0, 0, 0), "Spine": (0, 0, 0)}, (0, 0, 0)),
+            (1, {"Thigh.L": (35, 0, 0), "Shin.L": (-55, 0, 0), "Thigh.R": (35, 0, 0), "Shin.R": (-55, 0, 0), "Spine": (18, 0, 0),
+                 "EyeCamera": (4.0, -2.0, 0.0), "EyeCamera_loc": (0.0, -0.02, 0.02)}, (0, 0, 0)),
+            (13, {"Thigh.L": (92, 0, -6), "Shin.L": (-8, 0, 0), "Thigh.R": (92, 0, 6), "Shin.R": (-8, 0, 0),
+                  "Spine": (32, 0, 0), "UpperArm.L": (25, 0, 35), "UpperArm.R": (20, 0, -35),
+                  "EyeCamera": (14.5, -5.5, 0.0), "EyeCamera_loc": (0.0, -0.08, -0.06)}, (0, -0.10, -0.08)),
+            (37, {"Thigh.L": (86, 0, -5), "Shin.L": (-14, 0, 0), "Thigh.R": (86, 0, 5), "Shin.R": (-14, 0, 0),
+                  "Spine": (28, 0, 0), "UpperArm.L": (20, 0, 28), "UpperArm.R": (18, 0, -28),
+                  "EyeCamera": (11.0, -4.0, 0.0), "EyeCamera_loc": (0.0, -0.06, -0.08)}, (0, -0.08, -0.10)),
+            (97, {"Thigh.L": (0, 0, 0), "Shin.L": (0, 0, 0), "Thigh.R": (0, 0, 0), "Shin.R": (0, 0, 0), "Spine": (0, 0, 0),
+                  "EyeCamera": (0.0, 0.0, 0.0), "EyeCamera_loc": (0.0, 0.0, 0.0)}, (0, 0, 0)),
         ],
+        # climb_ledge: FPP_Unarmed_RoofJump2_FromBottomNoHang 10..39 @ 40fps = 0.725s (88 frames), ENABLE_DUCK @ 0.463s (f57)
         "climb_ledge": [
-            (1, {"UpperArm.L": (85, 0, 10), "Forearm.L": (-25, 0, 0), "UpperArm.R": (85, 0, -10), "Forearm.R": (-25, 0, 0)}, (0, 0, 0)),
-            (10, {"UpperArm.L": (25, 0, 15), "Forearm.L": (40, 0, 0), "UpperArm.R": (25, 0, -15), "Forearm.R": (40, 0, 0), "Chest": (-14, 0, 0)}, (0, 0.05, 0.12)),
-            (20, {"UpperArm.L": (0, 0, 0), "Forearm.L": (0, 0, 0), "UpperArm.R": (0, 0, 0), "Forearm.R": (0, 0, 0)}, (0, 0, 0)),
+            (1, {"UpperArm.L": (85, 0, 10), "Forearm.L": (-25, 0, 0), "UpperArm.R": (85, 0, -10), "Forearm.R": (-25, 0, 0),
+                 "EyeCamera": (-11.0, -4.5, 0.0), "EyeCamera_loc": (0.0, 0.02, -0.08)}, (0, 0, 0)),
+            (57, {"UpperArm.L": (25, 0, 15), "Forearm.L": (40, 0, 0), "UpperArm.R": (25, 0, -15), "Forearm.R": (40, 0, 0), "Chest": (-14, 0, 0),
+                  "EyeCamera": (-5.5, 3.5, 0.0), "EyeCamera_loc": (0.0, 0.04, 0.05)}, (0, 0.05, 0.12)),
+            (88, {"UpperArm.L": (0, 0, 0), "Forearm.L": (0, 0, 0), "UpperArm.R": (0, 0, 0), "Forearm.R": (0, 0, 0), "Chest": (0, 0, 0),
+                  "EyeCamera": (0.0, 0.0, 0.0), "EyeCamera_loc": (0.0, 0.0, 0.0)}, (0, 0, 0)),
         ],
+        # vault: FPP_Unarmed_JumpOnLowStand 0..15 @ 30fps = 0.500s (61 frames)
         "vault": [
-            (1, {"UpperArm.L": (55, 0, 8), "Forearm.L": (-10, 0, 0), "UpperArm.R": (-10, 0, -12)}, (0, 0, 0)),
-            (8, {"UpperArm.L": (15, 0, 12), "Thigh.L": (60, 0, 0), "Shin.L": (-80, 0, 0), "Thigh.R": (55, 0, 0), "Shin.R": (-75, 0, 0)}, (0, 0.04, 0.06)),
-            (16, {"UpperArm.L": (0, 0, 0), "Thigh.L": (0, 0, 0), "Shin.L": (0, 0, 0)}, (0, 0, 0)),
+            (1, {"UpperArm.L": (55, 0, 8), "Forearm.L": (-10, 0, 0), "UpperArm.R": (-10, 0, -12),
+                 "EyeCamera": (-3.0, -3.5, 1.5), "EyeCamera_loc": (0.0, 0.01, -0.02)}, (0, 0, 0)),
+            (25, {"UpperArm.L": (15, 0, 12), "Thigh.L": (60, 0, 0), "Shin.L": (-80, 0, 0), "Thigh.R": (55, 0, 0), "Shin.R": (-75, 0, 0),
+                  "EyeCamera": (-6.5, -7.5, 3.0), "EyeCamera_loc": (0.02, 0.03, 0.04)}, (0, 0.04, 0.06)),
+            (61, {"UpperArm.L": (0, 0, 0), "Thigh.L": (0, 0, 0), "Shin.L": (0, 0, 0), "Thigh.R": (0, 0, 0), "Shin.R": (0, 0, 0),
+                  "EyeCamera": (0.0, 0.0, 0.0), "EyeCamera_loc": (0.0, 0.0, 0.0)}, (0, 0, 0)),
         ],
+        # slide: FPP_Unarmed_SlideLoop 12 @ 30fps = 0.400s (49 frames)
         "slide": [
             (1, {"Hips": (25, 0, 0), "Thigh.R": (75, 0, 0), "Shin.R": (-10, 0, 0), "Thigh.L": (45, 0, 0), "Shin.L": (-85, 0, 0),
-                 "UpperArm.L": (28, 0, 20), "UpperArm.R": (-10, 0, -15)}, (0, -0.10, -0.52)),
-            (18, {"Hips": (25, 0, 0), "Thigh.R": (75, 0, 0), "Shin.R": (-10, 0, 0), "Thigh.L": (45, 0, 0), "Shin.L": (-85, 0, 0)}, (0, -0.10, -0.52)),
+                 "UpperArm.L": (28, 0, 20), "UpperArm.R": (-10, 0, -15),
+                 "EyeCamera": (4.0, -8.5, 2.0), "EyeCamera_loc": (0.0, -0.05, -0.35)}, (0, -0.10, -0.52)),
+            (49, {"Hips": (25, 0, 0), "Thigh.R": (75, 0, 0), "Shin.R": (-10, 0, 0), "Thigh.L": (45, 0, 0), "Shin.L": (-85, 0, 0),
+                  "UpperArm.L": (28, 0, 20), "UpperArm.R": (-10, 0, -15),
+                  "EyeCamera": (4.0, -8.5, 2.0), "EyeCamera_loc": (0.0, -0.05, -0.35)}, (0, -0.10, -0.52)),
         ],
+        # dodge_left: FPP_Unarmed_DodgeLeft 0..30 @ 40fps = 0.750s (91 frames)
         "dodge_left": [
-            (1, {"Spine": (0, -14, 0), "UpperArm.L": (20, 0, 22), "UpperArm.R": (10, 0, 12)}, (-0.08, 0, -0.04)),
-            (10, {"Spine": (0, 0, 0), "UpperArm.L": (0, 0, 0), "UpperArm.R": (0, 0, 0)}, (0, 0, 0)),
+            (1, {"Spine": (0, -14, 0), "UpperArm.L": (20, 0, 22), "UpperArm.R": (10, 0, 12),
+                 "EyeCamera": (-1.5, -8.0, 2.0), "EyeCamera_loc": (-0.05, 0.0, -0.03)}, (-0.08, 0, -0.04)),
+            (91, {"Spine": (0, 0, 0), "UpperArm.L": (0, 0, 0), "UpperArm.R": (0, 0, 0),
+                  "EyeCamera": (0.0, 0.0, 0.0), "EyeCamera_loc": (0.0, 0.0, 0.0)}, (0, 0, 0)),
         ],
+        # dodge_right: FPP_Unarmed_DodgeRight 0..30 @ 45fps = 0.667s (81 frames)
         "dodge_right": [
-            (1, {"Spine": (0, 14, 0), "UpperArm.L": (10, 0, -12), "UpperArm.R": (20, 0, -22)}, (0.08, 0, -0.04)),
-            (10, {"Spine": (0, 0, 0), "UpperArm.L": (0, 0, 0), "UpperArm.R": (0, 0, 0)}, (0, 0, 0)),
+            (1, {"Spine": (0, 14, 0), "UpperArm.L": (10, 0, -12), "UpperArm.R": (20, 0, -22),
+                 "EyeCamera": (-1.5, 8.0, -2.0), "EyeCamera_loc": (0.05, 0.0, -0.03)}, (0.08, 0, -0.04)),
+            (81, {"Spine": (0, 0, 0), "UpperArm.L": (0, 0, 0), "UpperArm.R": (0, 0, 0),
+                  "EyeCamera": (0.0, 0.0, 0.0), "EyeCamera_loc": (0.0, 0.0, 0.0)}, (0, 0, 0)),
         ],
+        # wall_run_left: FPP_Unarmed_WallRunLeft 33..45 @ 30fps = 0.400s (49 frames)
         "wall_run_left": [
-            (1, {"Chest": (-8, 12, 0), "UpperArm.L": (55, 0, 25), "UpperArm.R": (-15, 0, -15), "Thigh.L": (38, 0, 0), "Shin.L": (-52, 0, 0), "Thigh.R": (-25, 0, 0)}, (0, 0, 0)),
-            (10, {"Chest": (-8, 12, 0), "UpperArm.L": (45, 0, 22), "UpperArm.R": (22, 0, -12), "Thigh.L": (-25, 0, 0), "Thigh.R": (38, 0, 0), "Shin.R": (-52, 0, 0)}, (0, 0, 0.03)),
-            (18, {"Chest": (-8, 12, 0), "UpperArm.L": (55, 0, 25), "UpperArm.R": (-15, 0, -15), "Thigh.L": (38, 0, 0), "Shin.L": (-52, 0, 0), "Thigh.R": (-25, 0, 0)}, (0, 0, 0)),
+            (1, {"Chest": (-8, 12, 0), "UpperArm.L": (55, 0, 25), "UpperArm.R": (-15, 0, -15),
+                 "Thigh.L": (38, 0, 0), "Shin.L": (-52, 0, 0), "Thigh.R": (-25, 0, 0),
+                 "EyeCamera": (-2.0, 11.0, -2.5), "EyeCamera_loc": (0.03, 0.0, 0.01)}, (0, 0, 0)),
+            (25, {"Chest": (-8, 12, 0), "UpperArm.L": (45, 0, 22), "UpperArm.R": (22, 0, -12),
+                  "Thigh.L": (-25, 0, 0), "Thigh.R": (38, 0, 0), "Shin.R": (-52, 0, 0),
+                  "EyeCamera": (-3.0, 12.5, -3.0), "EyeCamera_loc": (0.04, 0.0, 0.03)}, (0, 0, 0.03)),
+            (49, {"Chest": (-8, 12, 0), "UpperArm.L": (55, 0, 25), "UpperArm.R": (-15, 0, -15),
+                  "Thigh.L": (38, 0, 0), "Shin.L": (-52, 0, 0), "Thigh.R": (-25, 0, 0),
+                  "EyeCamera": (-2.0, 11.0, -2.5), "EyeCamera_loc": (0.03, 0.0, 0.01)}, (0, 0, 0)),
         ],
+        # wall_run_right: FPP_Unarmed_WallRunRight 33..45 @ 30fps = 0.400s (49 frames)
         "wall_run_right": [
-            (1, {"Chest": (-8, -12, 0), "UpperArm.R": (55, 0, -25), "UpperArm.L": (-15, 0, 15), "Thigh.R": (38, 0, 0), "Shin.R": (-52, 0, 0), "Thigh.L": (-25, 0, 0)}, (0, 0, 0)),
-            (10, {"Chest": (-8, -12, 0), "UpperArm.R": (45, 0, -22), "UpperArm.L": (22, 0, 12), "Thigh.R": (-25, 0, 0), "Thigh.L": (38, 0, 0), "Shin.L": (-52, 0, 0)}, (0, 0, 0.03)),
-            (18, {"Chest": (-8, -12, 0), "UpperArm.R": (55, 0, -25), "UpperArm.L": (-15, 0, 15), "Thigh.R": (38, 0, 0), "Shin.R": (-52, 0, 0), "Thigh.L": (-25, 0, 0)}, (0, 0, 0)),
+            (1, {"Chest": (-8, -12, 0), "UpperArm.R": (55, 0, -25), "UpperArm.L": (-15, 0, 15),
+                 "Thigh.R": (38, 0, 0), "Shin.R": (-52, 0, 0), "Thigh.L": (-25, 0, 0),
+                 "EyeCamera": (-2.0, -11.0, 2.5), "EyeCamera_loc": (-0.03, 0.0, 0.01)}, (0, 0, 0)),
+            (25, {"Chest": (-8, -12, 0), "UpperArm.R": (45, 0, -22), "UpperArm.L": (22, 0, 12),
+                  "Thigh.R": (-25, 0, 0), "Thigh.L": (38, 0, 0), "Shin.L": (-52, 0, 0),
+                  "EyeCamera": (-3.0, -12.5, 3.0), "EyeCamera_loc": (-0.04, 0.0, 0.03)}, (0, 0, 0.03)),
+            (49, {"Chest": (-8, -12, 0), "UpperArm.R": (55, 0, -25), "UpperArm.L": (-15, 0, 15),
+                  "Thigh.R": (38, 0, 0), "Shin.R": (-52, 0, 0), "Thigh.L": (-25, 0, 0),
+                  "EyeCamera": (-2.0, -11.0, 2.5), "EyeCamera_loc": (-0.03, 0.0, 0.01)}, (0, 0, 0)),
         ],
-        # --- New 12 Dying Light 1 FPP animations ---
+        # ledge_hang: FPP_Unarmed_HangFromEdge 0..10 @ 10fps = 1.000s (121 frames)
         "ledge_hang": [
             (1, {"UpperArm.L": (98, 0, 14), "Forearm.L": (-16, 0, 0), "UpperArm.R": (98, 0, -14), "Forearm.R": (-16, 0, 0),
-                 "Spine": (6, 0, 0), "Thigh.L": (18, 0, 0), "Shin.L": (-26, 0, 0), "Thigh.R": (12, 0, 0), "Shin.R": (-18, 0, 0)}, (0, -0.04, -0.05)),
-            (20, {"UpperArm.L": (95, 0, 14), "Forearm.L": (-20, 0, 0), "UpperArm.R": (95, 0, -14), "Forearm.R": (-20, 0, 0),
-                  "Spine": (8, 0, 0), "Thigh.L": (22, 0, 0), "Shin.L": (-30, 0, 0), "Thigh.R": (14, 0, 0), "Shin.R": (-20, 0, 0)}, (0, -0.04, -0.07)),
-            (40, {"UpperArm.L": (98, 0, 14), "Forearm.L": (-16, 0, 0), "UpperArm.R": (98, 0, -14), "Forearm.R": (-16, 0, 0),
-                  "Spine": (6, 0, 0), "Thigh.L": (18, 0, 0), "Shin.L": (-26, 0, 0), "Thigh.R": (12, 0, 0), "Shin.R": (-18, 0, 0)}, (0, -0.04, -0.05)),
+                 "Spine": (6, 0, 0), "Thigh.L": (18, 0, 0), "Shin.L": (-26, 0, 0), "Thigh.R": (12, 0, 0), "Shin.R": (-18, 0, 0),
+                 "EyeCamera": (8.5, -1.5, 0.0), "EyeCamera_loc": (0.0, -0.02, -0.04)}, (0, -0.04, -0.05)),
+            (61, {"UpperArm.L": (95, 0, 14), "Forearm.L": (-20, 0, 0), "UpperArm.R": (95, 0, -14), "Forearm.R": (-20, 0, 0),
+                  "Spine": (8, 0, 0), "Thigh.L": (22, 0, 0), "Shin.L": (-30, 0, 0), "Thigh.R": (14, 0, 0), "Shin.R": (-20, 0, 0),
+                  "EyeCamera": (10.5, 1.5, 0.0), "EyeCamera_loc": (0.0, -0.02, -0.06)}, (0, -0.04, -0.07)),
+            (121, {"UpperArm.L": (98, 0, 14), "Forearm.L": (-16, 0, 0), "UpperArm.R": (98, 0, -14), "Forearm.R": (-16, 0, 0),
+                   "Spine": (6, 0, 0), "Thigh.L": (18, 0, 0), "Shin.L": (-26, 0, 0), "Thigh.R": (12, 0, 0), "Shin.R": (-18, 0, 0),
+                   "EyeCamera": (8.5, -1.5, 0.0), "EyeCamera_loc": (0.0, -0.02, -0.04)}, (0, -0.04, -0.05)),
         ],
+        # shimmy_left: FPP_Unarmed_ShimmyLeft_2 0..22 @ 35fps = 0.629s (76 frames = 0.625s)
         "shimmy_left": [
             (1, {"UpperArm.L": (98, 0, 26), "Forearm.L": (-12, 0, 0), "UpperArm.R": (92, 0, -8), "Forearm.R": (-22, 0, 0),
-                 "Chest": (0, -8, 10), "Thigh.L": (24, 0, -6), "Shin.L": (-30, 0, 0)}, (-0.06, -0.04, -0.04)),
-            (12, {"UpperArm.L": (92, 0, 10), "Forearm.L": (-24, 0, 0), "UpperArm.R": (100, 0, -20), "Forearm.R": (-14, 0, 0),
-                  "Chest": (0, 6, -8), "Thigh.R": (22, 0, 6), "Shin.R": (-28, 0, 0)}, (0.04, -0.04, -0.06)),
-            (24, {"UpperArm.L": (98, 0, 26), "Forearm.L": (-12, 0, 0), "UpperArm.R": (92, 0, -8), "Forearm.R": (-22, 0, 0),
-                  "Chest": (0, -8, 10), "Thigh.L": (24, 0, -6), "Shin.L": (-30, 0, 0)}, (-0.06, -0.04, -0.04)),
+                 "Chest": (0, -8, 10), "Thigh.L": (24, 0, -6), "Shin.L": (-30, 0, 0),
+                 "EyeCamera": (7.5, -4.5, 3.0), "EyeCamera_loc": (-0.04, -0.02, -0.03)}, (-0.06, -0.04, -0.04)),
+            (38, {"UpperArm.L": (92, 0, 10), "Forearm.L": (-24, 0, 0), "UpperArm.R": (100, 0, -20), "Forearm.R": (-14, 0, 0),
+                  "Chest": (0, 6, -8), "Thigh.R": (22, 0, 6), "Shin.R": (-28, 0, 0),
+                  "EyeCamera": (9.5, 2.5, -2.0), "EyeCamera_loc": (0.02, -0.02, -0.05)}, (0.04, -0.04, -0.06)),
+            (76, {"UpperArm.L": (98, 0, 26), "Forearm.L": (-12, 0, 0), "UpperArm.R": (92, 0, -8), "Forearm.R": (-22, 0, 0),
+                  "Chest": (0, -8, 10), "Thigh.L": (24, 0, -6), "Shin.L": (-30, 0, 0),
+                  "EyeCamera": (7.5, -4.5, 3.0), "EyeCamera_loc": (-0.04, -0.02, -0.03)}, (-0.06, -0.04, -0.04)),
         ],
+        # shimmy_right: FPP_Unarmed_ShimmyRight_2 0..22 @ 35fps = 0.629s (76 frames = 0.625s)
         "shimmy_right": [
             (1, {"UpperArm.R": (98, 0, -26), "Forearm.R": (-12, 0, 0), "UpperArm.L": (92, 0, 8), "Forearm.L": (-22, 0, 0),
-                 "Chest": (0, 8, -10), "Thigh.R": (24, 0, 6), "Shin.R": (-30, 0, 0)}, (0.06, -0.04, -0.04)),
-            (12, {"UpperArm.R": (92, 0, -10), "Forearm.R": (-24, 0, 0), "UpperArm.L": (100, 0, 20), "Forearm.L": (-14, 0, 0),
-                  "Chest": (0, -6, 8), "Thigh.L": (22, 0, -6), "Shin.L": (-28, 0, 0)}, (-0.04, -0.04, -0.06)),
-            (24, {"UpperArm.R": (98, 0, -26), "Forearm.R": (-12, 0, 0), "UpperArm.L": (92, 0, 8), "Forearm.L": (-22, 0, 0),
-                  "Chest": (0, 8, -10), "Thigh.R": (24, 0, 6), "Shin.R": (-30, 0, 0)}, (0.06, -0.04, -0.04)),
+                 "Chest": (0, 8, -10), "Thigh.R": (24, 0, 6), "Shin.R": (-30, 0, 0),
+                 "EyeCamera": (7.5, 4.5, -3.0), "EyeCamera_loc": (0.04, -0.02, -0.03)}, (0.06, -0.04, -0.04)),
+            (38, {"UpperArm.R": (92, 0, -10), "Forearm.R": (-24, 0, 0), "UpperArm.L": (100, 0, 20), "Forearm.L": (-14, 0, 0),
+                  "Chest": (0, -6, 8), "Thigh.L": (22, 0, -6), "Shin.L": (-28, 0, 0),
+                  "EyeCamera": (9.5, -2.5, 2.0), "EyeCamera_loc": (-0.02, -0.02, -0.05)}, (-0.04, -0.04, -0.06)),
+            (76, {"UpperArm.R": (98, 0, -26), "Forearm.R": (-12, 0, 0), "UpperArm.L": (92, 0, 8), "Forearm.L": (-22, 0, 0),
+                  "Chest": (0, 8, -10), "Thigh.R": (24, 0, 6), "Shin.R": (-30, 0, 0),
+                  "EyeCamera": (7.5, 4.5, -3.0), "EyeCamera_loc": (0.04, -0.02, -0.03)}, (0.06, -0.04, -0.04)),
         ],
+        # wall_run_up: FPP_Unarmed_WallRunFront 0..26 @ 30fps = 0.867s (105 frames)
         "wall_run_up": [
             (1, {"Chest": (10, 0, 0), "UpperArm.L": (88, 0, 12), "Forearm.L": (-18, 0, 0), "UpperArm.R": (42, 0, -12),
-                 "Thigh.L": (64, 0, 0), "Shin.L": (-80, 0, 0), "Thigh.R": (-12, 0, 0)}, (0, 0, 0.02)),
-            (8, {"Chest": (10, 0, 0), "UpperArm.L": (42, 0, 12), "UpperArm.R": (88, 0, -12), "Forearm.R": (-18, 0, 0),
-                 "Thigh.L": (-12, 0, 0), "Thigh.R": (64, 0, 0), "Shin.R": (-80, 0, 0)}, (0, 0, 0.05)),
-            (16, {"Chest": (10, 0, 0), "UpperArm.L": (88, 0, 12), "Forearm.L": (-18, 0, 0), "UpperArm.R": (42, 0, -12),
-                  "Thigh.L": (64, 0, 0), "Shin.L": (-80, 0, 0), "Thigh.R": (-12, 0, 0)}, (0, 0, 0.02)),
+                 "Thigh.L": (64, 0, 0), "Shin.L": (-80, 0, 0), "Thigh.R": (-12, 0, 0),
+                 "EyeCamera": (14.0, -3.0, 0.0), "EyeCamera_loc": (0.0, 0.0, 0.02)}, (0, 0, 0.02)),
+            (53, {"Chest": (10, 0, 0), "UpperArm.L": (42, 0, 12), "UpperArm.R": (88, 0, -12), "Forearm.R": (-18, 0, 0),
+                  "Thigh.L": (-12, 0, 0), "Thigh.R": (64, 0, 0), "Shin.R": (-80, 0, 0),
+                  "EyeCamera": (16.5, 3.0, 0.0), "EyeCamera_loc": (0.0, 0.0, 0.05)}, (0, 0, 0.05)),
+            (105, {"Chest": (10, 0, 0), "UpperArm.L": (88, 0, 12), "Forearm.L": (-18, 0, 0), "UpperArm.R": (42, 0, -12),
+                   "Thigh.L": (64, 0, 0), "Shin.L": (-80, 0, 0), "Thigh.R": (-12, 0, 0),
+                   "EyeCamera": (14.0, -3.0, 0.0), "EyeCamera_loc": (0.0, 0.0, 0.02)}, (0, 0, 0.02)),
         ],
+        # landing_roll: FPP_Unarmed_CrouchDamperRoll 0..30 @ 30fps = 1.000s (121 frames), CAN_WALK @ 0.867s (f105)
         "landing_roll": [
             (1, {"Spine": (-38, 0, 0), "Chest": (-28, 0, 0), "Thigh.L": (72, 0, 0), "Shin.L": (-98, 0, 0), "Thigh.R": (72, 0, 0), "Shin.R": (-98, 0, 0),
-                 "UpperArm.L": (55, 0, -15), "UpperArm.R": (55, 0, 15)}, (0, 0.06, -0.35)),
-            (10, {"Hips": (-78, 0, 0), "Spine": (-30, 0, 0), "Thigh.L": (92, 0, 0), "Shin.L": (-115, 0, 0), "Thigh.R": (92, 0, 0), "Shin.R": (-115, 0, 0),
-                  "UpperArm.L": (35, 0, -25), "UpperArm.R": (35, 0, 25)}, (0, 0.14, -0.58)),
-            (22, {"Hips": (0, 0, 0), "Spine": (-10, 0, 0), "Thigh.L": (25, 0, 0), "Shin.L": (-35, 0, 0), "Thigh.R": (15, 0, 0), "Shin.R": (-20, 0, 0)}, (0, 0, -0.10)),
+                 "UpperArm.L": (55, 0, -15), "UpperArm.R": (55, 0, 15),
+                 "EyeCamera": (-22.0, -8.0, 0.0), "EyeCamera_loc": (0.0, 0.04, -0.25)}, (0, 0.06, -0.35)),
+            (55, {"Hips": (-78, 0, 0), "Spine": (-30, 0, 0), "Thigh.L": (92, 0, 0), "Shin.L": (-115, 0, 0), "Thigh.R": (92, 0, 0), "Shin.R": (-115, 0, 0),
+                  "UpperArm.L": (35, 0, -25), "UpperArm.R": (35, 0, 25),
+                  "EyeCamera": (-42.0, -14.0, 0.0), "EyeCamera_loc": (0.0, 0.10, -0.45)}, (0, 0.14, -0.58)),
+            (105, {"Hips": (0, 0, 0), "Spine": (-12, 0, 0), "Thigh.L": (25, 0, 0), "Shin.L": (-35, 0, 0), "Thigh.R": (15, 0, 0), "Shin.R": (-20, 0, 0),
+                   "EyeCamera": (-6.0, -2.0, 0.0), "EyeCamera_loc": (0.0, 0.02, -0.08)}, (0, 0, -0.10)),
+            (121, {"Hips": (0, 0, 0), "Spine": (0, 0, 0), "Thigh.L": (0, 0, 0), "Shin.L": (0, 0, 0), "Thigh.R": (0, 0, 0), "Shin.R": (0, 0, 0),
+                   "EyeCamera": (0.0, 0.0, 0.0), "EyeCamera_loc": (0.0, 0.0, 0.0)}, (0, 0, 0)),
         ],
+        # tackle: FPP_Unarmed_Tackle 0..28 @ 25fps = 1.120s (135 frames = 1.117s), END_ANIMATION @ 0.600s (f73)
         "tackle": [
             (1, {"Chest": (-22, 0, -16), "Spine": (-16, 0, 0), "UpperArm.L": (48, 0, -24), "Forearm.L": (30, 0, 0),
-                 "UpperArm.R": (42, 0, 26), "Forearm.R": (30, 0, 0), "Thigh.L": (36, 0, 0), "Shin.L": (-48, 0, 0), "Thigh.R": (-24, 0, 0)}, (0, 0.08, -0.08)),
-            (14, {"Chest": (-26, 0, -18), "Spine": (-18, 0, 0), "UpperArm.L": (52, 0, -26), "Forearm.L": (34, 0, 0),
-                  "UpperArm.R": (46, 0, 28), "Forearm.R": (34, 0, 0), "Thigh.L": (-20, 0, 0), "Thigh.R": (38, 0, 0), "Shin.R": (-50, 0, 0)}, (0, 0.10, -0.10)),
-            (22, {"Chest": (0, 0, 0), "Spine": (0, 0, 0), "UpperArm.L": (0, 0, 0), "UpperArm.R": (0, 0, 0)}, (0, 0, 0)),
+                 "UpperArm.R": (42, 0, 26), "Forearm.R": (30, 0, 0), "Thigh.L": (36, 0, 0), "Shin.L": (-48, 0, 0), "Thigh.R": (-24, 0, 0),
+                 "EyeCamera": (-6.0, -7.0, 5.0), "EyeCamera_loc": (0.02, 0.04, -0.05)}, (0, 0.08, -0.08)),
+            (73, {"Chest": (-26, 0, -18), "Spine": (-18, 0, 0), "UpperArm.L": (52, 0, -26), "Forearm.L": (34, 0, 0),
+                  "UpperArm.R": (46, 0, 28), "Forearm.R": (34, 0, 0), "Thigh.L": (-20, 0, 0), "Thigh.R": (38, 0, 0), "Shin.R": (-50, 0, 0),
+                  "EyeCamera": (-8.5, -9.5, 6.5), "EyeCamera_loc": (0.03, 0.06, -0.07)}, (0, 0.10, -0.10)),
+            (135, {"Chest": (0, 0, 0), "Spine": (0, 0, 0), "UpperArm.L": (0, 0, 0), "UpperArm.R": (0, 0, 0),
+                   "EyeCamera": (0.0, 0.0, 0.0), "EyeCamera_loc": (0.0, 0.0, 0.0)}, (0, 0, 0)),
         ],
+        # grapple: FPP_Stick_Melee_RopeThrow 132..157 @ 30fps = 0.833s (101 frames), ROPE_LOCOMOTION_ATTACH @ 0.167s (f21)
         "grapple": [
-            (1, {"UpperArm.L": (76, 0, 6), "Forearm.L": (-8, 0, 0), "Hand.L": (12, 0, 0), "Chest": (-6, 0, 12), "UpperArm.R": (-12, 0, -10)}, (0, 0, 0)),
-            (10, {"UpperArm.L": (84, 0, 4), "Forearm.L": (18, 0, 0), "Chest": (14, 0, 10), "UpperArm.R": (-16, 0, -14), "Thigh.L": (32, 0, 0), "Shin.L": (-45, 0, 0)}, (0, 0.06, 0.04)),
-            (22, {"UpperArm.L": (45, 0, 8), "Forearm.L": (24, 0, 0), "Chest": (4, 0, 4), "UpperArm.R": (0, 0, 0)}, (0, 0, 0)),
+            (1, {"UpperArm.L": (76, 0, 6), "Forearm.L": (-8, 0, 0), "Hand.L": (12, 0, 0), "Chest": (-6, 0, 12), "UpperArm.R": (-12, 0, -10),
+                 "EyeCamera": (4.0, -2.5, 1.5), "EyeCamera_loc": (0.0, 0.0, 0.0)}, (0, 0, 0)),
+            (21, {"UpperArm.L": (84, 0, 4), "Forearm.L": (18, 0, 0), "Chest": (14, 0, 10), "UpperArm.R": (-16, 0, -14), "Thigh.L": (32, 0, 0), "Shin.L": (-45, 0, 0),
+                  "EyeCamera": (-4.5, 3.5, -2.0), "EyeCamera_loc": (0.0, 0.04, 0.03)}, (0, 0.06, 0.04)),
+            (101, {"UpperArm.L": (0, 0, 0), "Forearm.L": (0, 0, 0), "Chest": (0, 0, 0), "UpperArm.R": (0, 0, 0),
+                   "EyeCamera": (0.0, 0.0, 0.0), "EyeCamera_loc": (0.0, 0.0, 0.0)}, (0, 0, 0)),
         ],
+        # ground_pound: FPP_Stick2Heavy_Melee_Attack_GP_Empty 60..116 @ 30fps = 1.867s (225 frames), hit @ 0.117s (f15)
         "ground_pound": [
             (1, {"Spine": (14, 0, 0), "Chest": (12, 0, 0), "UpperArm.R": (108, 0, 18), "Forearm.R": (22, 0, 0),
-                 "UpperArm.L": (102, 0, -22), "Forearm.L": (22, 0, 0), "Thigh.L": (38, 0, 0), "Shin.L": (-65, 0, 0), "Thigh.R": (38, 0, 0), "Shin.R": (-65, 0, 0)}, (0, 0, 0.04)),
-            (10, {"Spine": (-26, 0, 0), "Chest": (-22, 0, 0), "UpperArm.R": (28, 0, 22), "Forearm.R": (-18, 0, 0),
-                  "UpperArm.L": (32, 0, -22), "Forearm.L": (-18, 0, 0), "Thigh.L": (64, 0, 0), "Shin.L": (-90, 0, 0), "Thigh.R": (58, 0, 0), "Shin.R": (-85, 0, 0)}, (0, 0.04, -0.36)),
-            (22, {"Spine": (0, 0, 0), "Chest": (0, 0, 0), "UpperArm.R": (0, 0, 0), "UpperArm.L": (0, 0, 0)}, (0, 0, 0)),
+                 "UpperArm.L": (102, 0, -22), "Forearm.L": (22, 0, 0), "Thigh.L": (38, 0, 0), "Shin.L": (-65, 0, 0), "Thigh.R": (38, 0, 0), "Shin.R": (-65, 0, 0),
+                 "EyeCamera": (10.0, 0.0, 0.0), "EyeCamera_loc": (0.0, 0.0, 0.03)}, (0, 0, 0.04)),
+            (15, {"Spine": (-26, 0, 0), "Chest": (-22, 0, 0), "UpperArm.R": (28, 0, 22), "Forearm.R": (-18, 0, 0),
+                  "UpperArm.L": (32, 0, -22), "Forearm.L": (-18, 0, 0), "Thigh.L": (64, 0, 0), "Shin.L": (-90, 0, 0), "Thigh.R": (58, 0, 0), "Shin.R": (-85, 0, 0),
+                  "EyeCamera": (-22.0, -6.0, 2.5), "EyeCamera_loc": (0.0, 0.04, -0.24)}, (0, 0.04, -0.36)),
+            (37, {"Spine": (-20, 0, 0), "Chest": (-16, 0, 0), "UpperArm.R": (24, 0, 18), "Forearm.R": (-12, 0, 0),
+                  "UpperArm.L": (26, 0, -18), "Forearm.L": (-12, 0, 0), "Thigh.L": (48, 0, 0), "Shin.L": (-70, 0, 0), "Thigh.R": (44, 0, 0), "Shin.R": (-65, 0, 0),
+                  "EyeCamera": (-14.0, -3.5, 1.5), "EyeCamera_loc": (0.0, 0.02, -0.16)}, (0, 0.02, -0.22)),
+            (225, {"Spine": (0, 0, 0), "Chest": (0, 0, 0), "UpperArm.R": (0, 0, 0), "UpperArm.L": (0, 0, 0),
+                   "EyeCamera": (0.0, 0.0, 0.0), "EyeCamera_loc": (0.0, 0.0, 0.0)}, (0, 0, 0)),
         ],
+        # stomp: FPP_Unarmed_StompFinisher_Level1 0..36 @ 30fps = 1.200s (145 frames), kickstand @ 0.533s (f65), crush @ 0.667s (f81)
         "stomp": [
-            (1, {"Thigh.R": (72, 0, 0), "Shin.R": (-78, 0, 0), "Foot.R": (-12, 0, 0), "Spine": (10, 0, 0), "UpperArm.L": (14, 0, 14), "UpperArm.R": (-10, 0, -10)}, (0, 0, 0.02)),
-            (9, {"Thigh.R": (24, 0, 0), "Shin.R": (-14, 0, 0), "Foot.R": (16, 0, 0), "Spine": (-16, 0, 0), "UpperArm.L": (-12, 0, 18), "UpperArm.R": (12, 0, -18)}, (0, 0.04, -0.12)),
-            (19, {"Thigh.R": (0, 0, 0), "Shin.R": (0, 0, 0), "Spine": (0, 0, 0)}, (0, 0, 0)),
+            (1, {"Thigh.R": (24, 0, 0), "Shin.R": (-32, 0, 0), "Spine": (-4, 0, 0),
+                 "EyeCamera": (-8.0, 1.5, 0.0), "EyeCamera_loc": (0.0, 0.0, 0.0)}, (0, 0, 0)),
+            (65, {"Thigh.R": (76, 0, 0), "Shin.R": (-82, 0, 0), "Foot.R": (-14, 0, 0), "Spine": (10, 0, 0),
+                  "UpperArm.L": (14, 0, 14), "UpperArm.R": (-10, 0, -10),
+                  "EyeCamera": (-12.0, 3.0, -1.0), "EyeCamera_loc": (0.0, 0.0, 0.02)}, (0, 0, 0.02)),
+            (81, {"Thigh.R": (24, 0, 0), "Shin.R": (-14, 0, 0), "Foot.R": (16, 0, 0), "Spine": (-16, 0, 0),
+                  "UpperArm.L": (-12, 0, 18), "UpperArm.R": (12, 0, -18),
+                  "EyeCamera": (-19.0, -5.5, 2.0), "EyeCamera_loc": (0.0, 0.03, -0.09)}, (0, 0.04, -0.12)),
+            (145, {"Thigh.R": (0, 0, 0), "Shin.R": (0, 0, 0), "Foot.R": (0, 0, 0), "Spine": (0, 0, 0),
+                   "EyeCamera": (0.0, 0.0, 0.0), "EyeCamera_loc": (0.0, 0.0, 0.0)}, (0, 0, 0)),
         ],
+        # grab_struggle: FPP_Unarmed_FastFinishWins 30..62 @ 30fps = 1.067s (129 frames), CAN_WALK @ 0.700s (f85), GRAB_RELEASE @ 0.833s (f101)
         "grab_struggle": [
-            (1, {"Chest": (8, -12, 16), "UpperArm.L": (68, 0, 12), "Forearm.L": (16, 0, 0), "UpperArm.R": (32, 0, -24), "Forearm.R": (26, 0, 0)}, (0, -0.03, 0)),
-            (8, {"Chest": (10, 14, -18), "UpperArm.L": (54, 0, -8), "Forearm.L": (28, 0, 0), "UpperArm.R": (66, 0, -10), "Forearm.R": (14, 0, 0)}, (0, -0.02, 0)),
-            (16, {"Chest": (8, -12, 16), "UpperArm.L": (68, 0, 12), "Forearm.L": (16, 0, 0), "UpperArm.R": (32, 0, -24), "Forearm.R": (26, 0, 0)}, (0, -0.03, 0)),
+            (1, {"Chest": (8, -12, 16), "UpperArm.L": (68, 0, 12), "Forearm.L": (16, 0, 0), "UpperArm.R": (32, 0, -24), "Forearm.R": (26, 0, 0),
+                 "EyeCamera": (-4.5, -7.5, 5.5), "EyeCamera_loc": (-0.02, -0.02, -0.01)}, (0, -0.03, 0)),
+            (43, {"Chest": (10, 14, -18), "UpperArm.L": (54, 0, -8), "Forearm.L": (28, 0, 0), "UpperArm.R": (66, 0, -10), "Forearm.R": (14, 0, 0),
+                  "EyeCamera": (4.0, 8.5, -6.5), "EyeCamera_loc": (0.02, -0.02, -0.01)}, (0, -0.02, 0)),
+            (85, {"Chest": (-12, 0, 8), "UpperArm.L": (78, 0, 18), "Forearm.L": (-12, 0, 0), "UpperArm.R": (78, 0, -18), "Forearm.R": (-12, 0, 0),
+                  "EyeCamera": (-6.0, -4.0, 2.0), "EyeCamera_loc": (0.0, 0.03, -0.02)}, (0, 0.02, 0)),
+            (129, {"Chest": (0, 0, 0), "UpperArm.L": (0, 0, 0), "Forearm.L": (0, 0, 0), "UpperArm.R": (0, 0, 0), "Forearm.R": (0, 0, 0),
+                   "EyeCamera": (0.0, 0.0, 0.0), "EyeCamera_loc": (0.0, 0.0, 0.0)}, (0, 0, 0)),
         ],
+        # exhausted_swing: FPP_Stick_Melee_Attack_ExhaustedPunch 0..47 @ 30fps = 1.567s (189 frames), damage [0.467s..0.667s] (f57..f81)
         "exhausted_swing": [
-            (1, {"Chest": (-12, 0, -8), "UpperArm.R": (18, -12, -16), "Forearm.R": (14, 0, 0), "UpperArm.L": (8, 0, 8)}, (0, 0, -0.04)),
-            (12, {"Chest": (-18, 0, 12), "UpperArm.R": (32, 18, 28), "Forearm.R": (-12, 10, 12), "Hand.R": (12, 0, 10), "UpperArm.L": (10, 0, 10)}, (0, 0.01, -0.06)),
-            (28, {"Chest": (-10, 0, 0), "UpperArm.R": (0, 0, 0), "Forearm.R": (0, 0, 0)}, (0, 0, -0.02)),
+            (1, {"Chest": (-12, 0, -8), "UpperArm.R": (18, -12, -16), "Forearm.R": (14, 0, 0), "UpperArm.L": (8, 0, 8),
+                 "EyeCamera": (-3.5, 3.0, -2.5), "EyeCamera_loc": (0.0, -0.01, -0.03)}, (0, 0, -0.04)),
+            (57, {"Chest": (-18, 0, 12), "UpperArm.R": (32, 18, 28), "Forearm.R": (-12, 10, 12), "Hand.R": (12, 0, 10), "UpperArm.L": (10, 0, 10),
+                  "EyeCamera": (-8.5, -7.5, 5.0), "EyeCamera_loc": (-0.02, 0.02, -0.055)}, (0, 0.01, -0.06)),
+            (81, {"Chest": (-20, 0, 14), "UpperArm.R": (24, 14, 22), "Forearm.R": (-8, 8, 10), "Hand.R": (8, 0, 8), "UpperArm.L": (12, 0, 10),
+                  "EyeCamera": (-9.5, -5.5, 3.5), "EyeCamera_loc": (-0.015, 0.015, -0.06)}, (0, 0.01, -0.065)),
+            (189, {"Chest": (0, 0, 0), "UpperArm.R": (0, 0, 0), "Forearm.R": (0, 0, 0), "Hand.R": (0, 0, 0),
+                   "EyeCamera": (0.0, 0.0, 0.0), "EyeCamera_loc": (0.0, 0.0, 0.0)}, (0, 0, 0)),
         ],
+        # crouch_idle: 1.600s (193 frames)
         "crouch_idle": [
             (1, {"Spine": (-12, 0, 0), "Chest": (-8, 0, 0), "Thigh.L": (66, 0, -4), "Shin.L": (-92, 0, 0), "Thigh.R": (62, 0, 4), "Shin.R": (-88, 0, 0),
-                 "UpperArm.L": (10, 0, 6), "UpperArm.R": (8, 0, -6)}, (0, -0.02, -0.42)),
-            (24, {"Spine": (-15, 0, 0), "Chest": (-10, 0, 0), "Thigh.L": (68, 0, -4), "Shin.L": (-95, 0, 0), "Thigh.R": (64, 0, 4), "Shin.R": (-91, 0, 0),
-                  "UpperArm.L": (12, 0, 6), "UpperArm.R": (10, 0, -6)}, (0, -0.02, -0.44)),
-            (48, {"Spine": (-12, 0, 0), "Chest": (-8, 0, 0), "Thigh.L": (66, 0, -4), "Shin.L": (-92, 0, 0), "Thigh.R": (62, 0, 4), "Shin.R": (-88, 0, 0),
-                  "UpperArm.L": (10, 0, 6), "UpperArm.R": (8, 0, -6)}, (0, -0.02, -0.42)),
+                 "UpperArm.L": (10, 0, 6), "UpperArm.R": (8, 0, -6),
+                 "EyeCamera": (-1.5, 0.0, 0.0), "EyeCamera_loc": (0.0, 0.0, -0.28)}, (0, -0.02, -0.42)),
+            (97, {"Spine": (-15, 0, 0), "Chest": (-10, 0, 0), "Thigh.L": (68, 0, -4), "Shin.L": (-95, 0, 0), "Thigh.R": (64, 0, 4), "Shin.R": (-91, 0, 0),
+                  "UpperArm.L": (12, 0, 6), "UpperArm.R": (10, 0, -6),
+                  "EyeCamera": (-2.2, 0.3, 0.0), "EyeCamera_loc": (0.0, 0.0, -0.29)}, (0, -0.02, -0.44)),
+            (193, {"Spine": (-12, 0, 0), "Chest": (-8, 0, 0), "Thigh.L": (66, 0, -4), "Shin.L": (-92, 0, 0), "Thigh.R": (62, 0, 4), "Shin.R": (-88, 0, 0),
+                   "UpperArm.L": (10, 0, 6), "UpperArm.R": (8, 0, -6),
+                   "EyeCamera": (-1.5, 0.0, 0.0), "EyeCamera_loc": (0.0, 0.0, -0.28)}, (0, -0.02, -0.42)),
         ],
     }
     for aname, kfs in anims.items():
         bake_nla_action(arm_obj, aname, kfs)
-    return arm_obj, mesh_obj
+    return arm_obj, mesh_obj, mesh_source
 
 
 def export_glb(dest: Path) -> None:
@@ -775,18 +1087,26 @@ def main() -> int:
 
     # 2. FPP Player
     clear_scene()
-    arm_fpp, mesh_fpp = build_fpp_player()
+    arm_fpp, mesh_fpp, fpp_source = build_fpp_player()
     fpp_dest = OUT_DIR / "dl_player_fpp.glb"
     export_glb(fpp_dest)
     fpp_anims = [t.name for t in arm_fpp.animation_data.nla_tracks]
+    fpp_durations = {
+        t.name: round((t.strips[0].action_frame_end - t.strips[0].action_frame_start) / 120.0, 3)
+        for t in arm_fpp.animation_data.nla_tracks
+    }
     manifest["player_fpp"] = {
         "glb": "res://assets_ref/dl_rigged/dl_player_fpp.glb",
+        "mesh_source": fpp_source,
+        "verts": len(mesh_fpp.data.vertices),
         "weapon_socket_bone": "WeaponSocket",
+        "eye_camera_bone": "EyeCamera",
         "animations": fpp_anims,
+        "clip_durations": fpp_durations,
         "forward": "-Z",
         "bones": len(arm_fpp.data.bones),
     }
-    print(f"Exported {fpp_dest.name}: {fpp_dest.stat().st_size // 1024} KB (anims={len(fpp_anims)})")
+    print(f"Exported {fpp_dest.name}: {fpp_dest.stat().st_size // 1024} KB (source={fpp_source}, anims={len(fpp_anims)})")
 
     # 3. Weapons normalized with grip at (0,0,0), shaft +Z (Blender) / +Y (Godot), edge +Y (Blender) / -Z (Godot)
     for spec in WEAPON_SPECS:

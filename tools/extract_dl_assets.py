@@ -84,6 +84,22 @@ MODELS = [
             (31, "head", "common_textures_2_pc.rpack", "zombie_man_a_head_a_white_clr"),
         ],
     },
+    {
+        "key": "dl_player_fpp",
+        "mesh_rpack": "common_meshes_PC.rpack",
+        "mesh_name": "player_dieselpunk_fpp",
+        "stride": 40,
+        "uv_off": 24,
+        "nrm_off": 20,
+        "parts": [
+            (0, "hands", "common_textures_0_pc.rpack", "diesel_punk_hands_dif"),
+            (1, "legs", "common_textures_0_pc.rpack", "diesel_punk_legs_dif"),
+            (2, "torso", "common_textures_0_pc.rpack", "diesel_punk_torso_dif"),
+        ],
+        "sub_materials": {
+            0: [(24318, "watch", "common_textures_0_pc.rpack", "dieselpunk_watch_numbers")],
+        },
+    },
 ]
 
 
@@ -157,7 +173,8 @@ def decode_dds_to_png(tex_parts: dict[int, bytes], dest: Path, max_dim: int = 10
     struct.pack_into("<2I4s5I", dds_hdr, 76, 32, 0x4, fourcc_map[fmt_code], 0, 0, 0, 0, 0)
     struct.pack_into("<I", dds_hdr, 108, 0x1000)
 
-    img = Image.open(io.BytesIO(bytes(dds_hdr) + tex_parts[0x21][:mip0_sz])).convert("RGB")
+    raw_pixels = tex_parts.get(0x21) or tex_parts[0x22]
+    img = Image.open(io.BytesIO(bytes(dds_hdr) + raw_pixels[:mip0_sz])).convert("RGB")
     if max(img.size) > max_dim:
         img = img.copy()
         img.thumbnail((max_dim, max_dim), Image.Resampling.LANCZOS)
@@ -256,7 +273,18 @@ def main() -> int:
             idxs = struct.unpack(f"<{icnt}H", ib[ib_off : ib_off + icnt * 2])
             if max(idxs) >= vcnt:
                 raise RuntimeError(f"Index out of range in {key} part {rec_idx}: {max(idxs)} >= {vcnt}")
+            sub_splits: dict[int, str] = {}
+            for split_idx, sub_mat, sub_rpack, sub_tex in spec.get("sub_materials", {}).get(rec_idx, []):
+                sub_dest = model_dir / f"{key}_{sub_mat}.png"
+                decode_dds_to_png(get_rpack(sub_rpack).read_entry(sub_tex), sub_dest, max_dim=1024)
+                mat_paths[sub_mat] = res_path(sub_dest)
+                mtl_lines.extend([f"newmtl {sub_mat}", "Kd 1.0 1.0 1.0", f"map_Kd {sub_dest.name}", ""])
+                sub_splits[split_idx] = sub_mat
             for t in range(0, icnt, 3):
+                if t in sub_splits:
+                    smat = sub_splits[t]
+                    obj_lines.append(f"g {key}_{smat}")
+                    obj_lines.append(f"usemtl {smat}")
                 i0, i1, i2 = idxs[t] + 1 + v_base, idxs[t + 1] + 1 + v_base, idxs[t + 2] + 1 + v_base
                 obj_lines.append(f"f {i0}/{i0}/{i0} {i1}/{i1}/{i1} {i2}/{i2}/{i2}")
             v_base += vcnt

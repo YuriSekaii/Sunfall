@@ -890,7 +890,11 @@ func _update_hud() -> void:
 	_thirst_bar.value = s["thirst"]
 
 	if _telemetry_panel != null and _telemetry_panel.visible and _telemetry_label != null:
-		_telemetry_label.text = _player.telemetry.format_overlay_text()
+		_telemetry_label.text = _player.telemetry.format_overlay_text() + "\nHUD State: %s | Slide: %s | LandTier: %d" % [
+			String(s.get("move_state", "IDLE")),
+			String(s.get("slide_phase", "none")),
+			int(s.get("landing_tier", 0)),
+		]
 
 	var slot := int(s["active_slot"])
 	var w_name: String = s["weapon_name"]

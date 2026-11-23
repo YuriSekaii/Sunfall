@@ -63,24 +63,26 @@ Open the **Pause Menu (`Esc`)** and click **Check for Updates** (`scripts/autolo
 ## 🏃 Core Mechanic Systems
 
 ### 1. Dying Light 1 Movement & Parkour (`scripts/player.gd`, `scripts/dl_reference.gd`)
-* **Base Kinematics (`Data0.pak`)**: Gravity `16.80 m/s²`, Jump `5.825 m/s` (`1.01m` apex, `0.40s` interval, `0.12s` coyote time, `0.15s` jump buffer), Walk `3.5 m/s`, Back/Strafe `2.5 m/s`, Sprint `6.0 m/s`, Crouch `1.5 m/s`, `50°` max slope, `0.51m` stair step-up, linear `move_toward` accel/decel (`40.0` ground, `10.0` sprint, `4.0/10.0` crouch, `0.22` air control).
-* **Real Crouch Capsule**: Standing `1.75m` (eye `1.56m`) ↔ crouched/sliding `1.05m` (eye `0.90m`) with overhead ray clearance check before standing.
-* **Ledge Grab, Hang, Shimmy & Wall-Run**:
-  * **Low Vault (`0.45m`–`1.25m`)**: `0.26s` traversal (vaults over thin obstacles `<= 1.0m` or on top, exiting at `6.4 m/s`).
-  * **High Mantle (`1.25m`–`2.35m`)**: `0.46s` pull-up with camera dip.
-  * **Ledge Hang (`2.35m`–`3.30m`)**: Free `±180°` look, `A/D` shimmy (`1.6 m/s`), `W/Space` climb up, look away + `Space` for `180°` jump-off, `Ctrl/C/S` drop.
+Calibrated directly from `DW/Data0.pak` and `gamedll_x64_rwdi.dll` reverse-engineering specs in [`docs/dl1_re/`](docs/dl1_re/01_data_catalog.md):
+* **Base Kinematics (`Data0.pak` & `MoveController`)**: Gravity `16.80 m/s²`, Jump `5.825 m/s` (`1.01m` apex, `0.40s` interval, `0.12s` coyote time, `0.15s` jump buffer), Walk `3.5 m/s`, Back/Strafe `2.5 m/s`, Sprint `6.0 m/s`, Crouch `1.5 m/s`, `50°` max slope, `0.51m` stair step-up, linear `move_toward` accel/decel (`40.0` ground, `10.0` sprint, `4.0/10.0` crouch, `0.22` air control), and slope slide-down ramp `clamp(slope_deg * 0.0175556 + 0.01, 0.01, 0.80)`.
+* **Real Crouch Capsule (`PlayerDuckModule`)**: Standing `1.75m` (eye `1.56m`) ↔ crouched/sliding `1.05m` (eye `0.90m`) with `0.30m × 1.50m` overhead `duck_capsule` clearance check before standing.
+* **4-Phase Slide & Dodge**: Slide progresses through `SlideBegin` (`0.333s`) → `SlideLoop` / `SlideLoopRight` (`> 5°` yaw delta, `0.400s`) → `SlideKick` (`0.567s`, hit @ `0.233s`) → `SlideEnd` (`0.481s`). Dodge (`0.15s` min interval, `0.75s` cd) fires a `6.0` impulse + `9.0 m/s` burst.
+* **Natural Movement, Ledge Grab, Shimmy & Wall-Run**:
+  * **3-Band Obstacle Probes**: `0.85m` low hurdle/vault (`0.500s`, exits at `6.0 m/s`), `1.35m` waist mantle, `1.65m` chest climb (`0.725s`).
+  * **Edge Grab (`EdgeGrabController`)**: `0.2158m` hand-to-ledge grip offset, discrete `0.40m` (`-0.03m` vertical slice) shimmy steps (`0.625s` beat), `±75°` hang / `±62°` shimmy yaw clamps, and `4.5 m/s` horizontal ballistic `180°` jump-off (`1.3m` peak clamp).
   * **Vertical Front Wall-Run & Lateral Tic-Tac**: Holding `W+Space` straight into a wall climbs `+1.8m` (`wall_run_up`), enabling `~4.3m` ledge grabs; lateral Tic-Tac runs up to `1.1s` (`WALL_RUN_EXTRA_GRAVITY = 9.5`, `±11°` roll, up to `2` wall-jumps).
-* **Fall Damage, Landing Roll & Amortizers**: `< 3.5m` `0` dmg; `3.5m–6.5m` `0.22s` recovery; `6.5m–9.0m` fall damage unless `Ctrl/C` pressed/held within `1.0s` → `360°` Landing Roll (`0` dmg, `7.8 m/s`); `> 9.0m` severe/lethal unless landing on an `amortizer` pad (`0` dmg, `-3.0°` FOV).
-* **Dual Stamina & Survival**:
-  * **Fitness**: Drains `0.10/s` sprinting and `0.10` per jump (`0.75s` delay / `5.0s` on empty, `2.0/s` regen, `0.6×` speed when exhausted until `>= 0.33`).
-  * **Combat Stamina**: `2.5s` delay / `4.0s` on empty, `1.5/s` regen, `0.6×` cost on miss; exhausted swings remain usable (`0.95s` cycle, `0.65×` dmg).
+* **Fall Helper, 6-Tier Landing & Amortizers (`PlayerFallHelperModule`, `LandingController`)**: `25.0m` downward lookahead ray (`vel.y <= -15.0 m/s` trigger, `8.5m / ±40°` amortizer capture); 6 landing severity tiers (`0..5`), `±90° / 0.3s` landing look blend, `> 5.0m` heavy vs. light shockwave, `CrouchDamper` (`0.80s`) vs. `360°` `CrouchDamperRoll` (`1.00s`, `0` dmg within `1.0s` window), and `amortizer` pads (`0` dmg, `-3.0°` FOV).
+* **Dual Stamina (`PlayerFitnessModule` & `PlayerStaminaModule`)**:
+  * **Fitness**: Drains `0.10/s` sprinting and `0.10` per jump (`0.75s` delay / `5.0s` on empty, `2.0/s` regen, `0.75×` while moving/crouching); sprint gated by `fitness > 0.06` & non-exhausted, with smooth `0.8 + 0.2 * clamp((fitness - 0.2)/0.3, 0, 1)` speed curve.
+  * **Combat Stamina**: `2.5s` delay / `4.0s` on empty, `1.5/s` regen, `0.6×` cost on miss; exhausted swings remain usable (`1.567s` cycle, `0.65×` dmg).
   * **Needs**: Max HP `100` (slow regen up to `25 HP`); Hunger `-0.16/s`, Thirst `-0.22/s` (`0` causes `-20%` speed and `-0.35 HP/s` down to `1 HP`).
+* **FPP Rig & Camera Coupling (`CameraFPPDI`, `LookController`, `player_dieselpunk_fpp`)**: Extracted real Dying Light 1 `player_dieselpunk_fpp` FPP mesh (`14,554` verts, hands + watch + legs + torso) with `21` bones incl. `WeaponSocket` and `EyeCamera` (`idx=14`), `28` `.scr`-timed clips, `LookParams` `[-89°, +70°]` pitch clamp, `LookController` cosine slew (`0.25 - cos(x*pi)*0.25`), `0.133s` `LookBack` whip, and stride footsteps (`0.567s` sprint / `0.883s` walk).
 
 ### 2. Melee Combat & Weapons (`scripts/player.gd`, `scripts/loot_table.gd`)
-* **Swept 5-Ray Combo, Headshots & Apex Timing**: Light swings alternate left/right (`0.60s` cycle, `±6°` roll) with a 5-ray arc, `2.0×` Headshot Crits (`z.is_headshot_pos`), and apex hit timing (`0.16s` fast / `0.22s` heavy) with `0.045s` hit-pause + particle bursts.
-* **Charged Heavy, Tackle & Ground Pound**: Hold `LMB >= 0.50s` for Heavy Swing (`1.75×` dmg, `+0.15m` reach). `Shift+E`/`Shift+RMB` tackles (`+6.0 m/s`, `0.40` stam, `1.0s` cd, knockdown). Airborne `LMB` looking down (`pitch < -0.35`) or `Ctrl+LMB` triggers Ground Pound (`-16 m/s`, `3.0m` shockwave knockdown, `32` dmg).
-* **Kick, Dropkick & Head Stomp**: Grounded `Q` (`0.625s`/`0.25s`, `0` stam, `8` dmg), Air Kick (`0.30` stam), Dropkick (`0.50` stam, `40` dmg, `23.0` knockback + `2.5s` knockdown), and Head Stomp (`E`/`Q` near downed zombie, `120` dmg).
-* **Zombie Grab & Fast Break**: Active non-biters within `1.25m` (`8s` cd) can grab the player; mash `Space/E/A/D` (`3` taps) to shove free and stun the zombie for `3.0s`.
+* **Continuous `±60°` Sweep, Headshots & Active Windows**: Light swings alternate RL (`0.600s`, hit `[0.093s..0.333s]`) and LR (`0.500s`, hit `[0.083s..0.333s]`) with `±6°` camera roll, continuous `±60°` multi-target sweep + per-swing deduplication, `2.0×` Headshot Crits (`z.is_headshot_pos`), and `0.045s` hit-pause + particle bursts.
+* **Charged Heavy, Tackle & Ground Pound**: Hold `LMB >= 0.50s` for Heavy Swing (`1.667s`, `[0.667s..0.879s]`, `1.75×` dmg, `+0.15m` reach). `Shift+E`/`Shift+RMB` tackles (`+6.0 m/s`, `0.40` stam, `1.0s` cd, knockdown). Airborne `LMB` looking down (`pitch < -0.35`) or `Ctrl+LMB` triggers Ground Pound (`-16 m/s`, `3.0m` shockwave knockdown, `32` dmg).
+* **Kick, Dropkick & Head Stomp**: Grounded `Q` (`0.625s`, `[0.25s..0.35s]`, `0` stam, `8` dmg), `KickLow` (`0.533s`), Air Kick (`0.567s`, `0.30` stam), Dropkick (`0.800s`, `0.50` stam, `40` dmg, `23.0` knockback + `2.5s` knockdown + `1.267s` `StandUpFast`), and `StompFinisher` (`1.200s`, `120` dmg).
+* **Zombie Grab & Fast Break**: Active non-biters within `1.25m` (`8s` cd) can grab the player (`2.0s` struggle input window); mash `Space/E/A/D` (`3` taps) to shove free (`1.067s` `FastFinishWins`) and stun the zombie for `3.0s`. Active AI zombies can also perform `DodgeModule` sidesteps.
 
 | Tier | Weapon | Damage | Reach | Stamina Cost |
 | :---: | :--- | :---: | :---: | :---: |
@@ -127,8 +129,12 @@ Sunfall/
 ├── tools/
 │   ├── ensure_git.bat                # Portable git unpack & ZIP->clone bootstrap
 │   ├── extract_ref_assets.py         # 7D2D reference asset extractor
-│   ├── extract_dl_assets.py          # Dying Light RP6L archive extractor
-│   └── rig_and_animate_dl.py         # Blender 5.3.0 rigging & NLA animation exporter
+│   ├── extract_dl_assets.py          # Dying Light RP6L archive & FPP player extractor
+│   ├── rig_and_animate_dl.py         # Blender 5.3.0 rigging (EyeCamera + 28 .scr-timed clips)
+│   ├── re_dl_data.py                 # Data0.pak / Data2.pak / .rpack catalog extractor
+│   └── re_dl_binary.py               # gamedll_x64_rwdi.dll RTTI/VTable & disassembly mapper
+├── docs/
+│   └── dl1_re/                       # Reverse-engineered Dying Light 1 data & binary specs (01..06)
 ├── scenes/
 │   └── main.tscn                     # Root world scene
 ├── scripts/

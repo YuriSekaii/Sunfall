@@ -58,6 +58,8 @@ func _reset_player(player: Player, pos: Vector3, yaw: float = 0.0, pitch: float 
 	player._kick_cd = 0.0
 	player._attack_cd = 0.0
 	player._pending_melee_timer = -1.0
+	player._melee_sweep_active = false
+	player._slide_phase = "none"
 	player._dodge_cd = 0.0
 	player._slide_cd = 0.0
 	player._tackle_cd = 0.0
@@ -105,9 +107,12 @@ func _run_parity() -> void:
 		return
 
 	# Move ambient zombies out of the calibration clearing so locomotion checks are clean
+	var amb_idx := 0
 	for z in get_nodes_in_group("enemies"):
 		if z is Node3D:
-			(z as Node3D).global_position = Vector3(40.0, 0.2, 40.0)
+			(z as Node3D).global_position = Vector3(32.0 + float(amb_idx) * 2.0, 0.2, 40.0)
+			z.set_physics_process(false)
+			amb_idx += 1
 
 	# --- 1. Base Locomotion Speeds ---
 	await _reset_player(player, Vector3(0.0, 0.0, 32.0))
@@ -467,6 +472,95 @@ func _run_parity() -> void:
 
 	var dumped := player.telemetry.dump_json("user://dl_parity_trace.json")
 	_record("Telemetry JSON dump", dumped and FileAccess.file_exists("user://dl_parity_trace.json"), "dumped=%s" % dumped)
+
+	# --- 11. Stage B Reverse-Engineered Binary Contracts (gamedll_x64_rwdi.dll) ---
+	# 11a. WeaponMeleeController (0x00cfe531) continuous ±60° multi-target arc sweep
+	await _reset_player(player, Vector3(0.0, 0.0, 32.0))
+	var z_sw1 := Zombie.new()
+	z_sw1.configure(true, false)
+	z_sw1.position = Vector3(-0.75, 0.0, 30.6)
+	world.add_child(z_sw1)
+	var z_sw2 := Zombie.new()
+	z_sw2.configure(true, false)
+	z_sw2.position = Vector3(0.75, 0.0, 30.6)
+	world.add_child(z_sw2)
+	z_sw1._attack_timer = 2.0
+	z_sw2._attack_timer = 2.0
+	await physics_frame
+	var sw1_hp0 := z_sw1.hp
+	var sw2_hp0 := z_sw2.hp
+	player._melee_swing(false)
+	for _i in 15:
+		await physics_frame
+	var sweep_hits := int(player.telemetry.get_binary_event("last_melee_sweep_hits", 0))
+	_record("Binary: ±60° Multi-Target Melee Sweep", z_sw1.hp < sw1_hp0 and z_sw2.hp < sw2_hp0 and sweep_hits >= 2, "hits=%d hp1=%.1f hp2=%.1f" % [sweep_hits, z_sw1.hp, z_sw2.hp])
+	z_sw1.queue_free()
+	z_sw2.queue_free()
+
+	# 11b. PlayerFitnessModule (0x00ce1521, 0x00d4979c) curve & >0.06 sprint gate & 0.75x regen modifier
+	var fit_curve_ok := is_equal_approx(DLReference.compute_fitness_speed_factor(0.20), 0.80) and is_equal_approx(DLReference.compute_fitness_speed_factor(0.35), 0.90) and is_equal_approx(DLReference.compute_fitness_speed_factor(0.50), 1.00)
+	var fit_gate_ok := not DLReference.can_sprint_with_fitness(0.05, false) and DLReference.can_sprint_with_fitness(0.07, false) and not DLReference.can_sprint_with_fitness(0.50, true)
+	var fit_regen_ok := is_equal_approx(DLReference.FITNESS_MOVE_CROUCH_REGEN_MUL, 0.75)
+	_record("Binary: PlayerFitnessModule curve & >0.06 gate", fit_curve_ok and fit_gate_ok and fit_regen_ok, "curve=%s gate=%s regen0.75=%s" % [fit_curve_ok, fit_gate_ok, fit_regen_ok])
+
+	# 11c. MoveController Slope Slide-Down (0x00d50c90) & PlayerDuckModule 0.30m x 1.50m capsule (0x00cde585)
+	var slope_ok := is_equal_approx(DLReference.compute_slope_slide_factor(0.0), 0.01) and is_equal_approx(DLReference.compute_slope_slide_factor(45.0), 0.80) and is_equal_approx(DLReference.compute_slope_slide_factor(20.0), 20.0 * 0.0175556 + 0.01)
+	var duck_ok := is_equal_approx(DLReference.DUCK_CAPSULE_RADIUS, 0.30) and is_equal_approx(DLReference.DUCK_CAPSULE_HEIGHT, 1.50)
+	_record("Binary: Slope SlideDown & 0.30x1.50m DuckCapsule", slope_ok and duck_ok, "slope=%s duck=%s" % [slope_ok, duck_ok])
+
+	# 11d. NaturalMovementController (0x00d5733c) 3-band probes (0.85m / 1.35m / 1.65m)
+	await _reset_player(player, Vector3(-7.5, 0.0, 0.15))
+	var band_low := int(player._probe_nm_three_bands(Vector3(0.0, 0.0, -1.0))["highest_band"])
+	await _reset_player(player, Vector3(-8.5, 0.0, -4.2))
+	var band_high := int(player._probe_nm_three_bands(Vector3(0.0, 0.0, -1.0))["highest_band"])
+	_record("Binary: 3-Band NM Probes (0.85/1.35/1.65m)", band_low == 1 and band_high == 3, "low_box_band=%d high_box_band=%d" % [band_low, band_high])
+
+	# 11e. EdgeGrabController (0x00d084f6..0x00d104f0): 0.2158m offset, 0.40m shimmy, ±75°/±62° clamps, 4.5 m/s leap
+	player._ledge_hanging = true
+	player._ledge_attach_yaw = 0.0
+	player._shimmy_dir = 0
+	var clamped_hang_deg := rad_to_deg(absf(player.clamp_ledge_look_yaw(2.2)))
+	player._shimmy_dir = 1
+	var clamped_shimmy_deg := rad_to_deg(absf(player.clamp_ledge_look_yaw(2.2)))
+	player._ledge_hanging = false
+	var leap_v := DLReference.compute_edge_leap_velocity(Vector3.ZERO, Vector3(0.0, 1.0, -4.5))
+	var leap_h_spd := Vector2(leap_v.x, leap_v.z).length()
+	var edge_ok := is_equal_approx(DLReference.EDGE_HAND_GRIP_OFFSET, 0.2158) and is_equal_approx(DLReference.EDGE_SHIMMY_STEP, 0.40) and is_equal_approx(clamped_hang_deg, 75.0) and is_equal_approx(clamped_shimmy_deg, 62.0) and is_equal_approx(leap_h_spd, 4.5)
+	_record("Binary: EdgeGrab 0.2158m / ±75° & ±62° / 4.5m/s", edge_ok, "hang=%.1f° shimmy=%.1f° leap_vh=%.2f" % [clamped_hang_deg, clamped_shimmy_deg, leap_h_spd])
+
+	# 11f. 4-Phase Slide (0x00cfbf50: SlideBegin -> SlideLoop/SlideLoopRight -> SlideKick -> SlideEnd)
+	await _reset_player(player, Vector3(0.0, 0.0, 34.0))
+	Input.action_press("move_forward")
+	Input.action_press("sprint")
+	for _i in 36:
+		await physics_frame
+	Input.action_release("sprint")
+	await _tap_action("crouch")
+	var ph_begin := player.get_slide_phase()
+	player._yaw += deg_to_rad(8.0)
+	for _i in 24:
+		await physics_frame
+	var ph_loop_r := player.get_slide_phase()
+	player._trigger_slide_kick()
+	var ph_kick := player.get_slide_phase()
+	Input.action_release("move_forward")
+	_record("Binary: 4-Phase Slide & SlideLoopRight (>5°)", ph_begin == "SlideBegin" and ph_loop_r == "SlideLoopRight" and ph_kick == "SlideKick", "begin=%s loop=%s kick=%s" % [ph_begin, ph_loop_r, ph_kick])
+
+	# 11g. LandingController (0x00d3e890, 0x00d3e9b6) 6 tiers (0..5) & >5.0m shockwave threshold
+	var tiers_ok := DLReference.classify_landing_tier(0.5, false, false) == 0 and DLReference.classify_landing_tier(7.0, true, false) == 1 and DLReference.classify_landing_tier(2.2, false, false) == 2 and DLReference.classify_landing_tier(4.5, false, false) == 3 and DLReference.classify_landing_tier(7.5, false, true) == 4 and DLReference.classify_landing_tier(10.0, false, false) == 5
+	player.hp = 100.0
+	player._resolve_landing(4.0)
+	var sw_light := String(player.telemetry.get_binary_event("last_landing_shockwave", ""))
+	player._crouch_damping_timer = 0.8
+	player._resolve_landing(7.5)
+	var sw_heavy := String(player.telemetry.get_binary_event("last_landing_shockwave", ""))
+	player.hp = 100.0
+	_record("Binary: LandingController 6 tiers & shockwave", tiers_ok and sw_light == "Melee_LightLandingShockwave" and sw_heavy == "Melee_HeavyLandingShockwave", "tiers=%s light=%s heavy=%s" % [tiers_ok, sw_light, sw_heavy])
+
+	# 11h. EyeCamera Bone Coupling (0x00d06050) & LookParams("Normal") [-89°, +70°] & Cosine Slew (0x00d43a14)
+	var eye_ok := player._eye_camera_bone_idx != -1 and bool(player.telemetry.get_binary_event("eye_camera_coupled", false))
+	var look_ok := is_equal_approx(DLReference.LOOK_PITCH_MIN_DEG, -89.0) and is_equal_approx(DLReference.LOOK_PITCH_MAX_DEG, 70.0) and is_equal_approx(DLReference.compute_look_cosine_slew(1.0), 0.50)
+	_record("Binary: EyeCamera bone + LookParams [-89°,+70°]", eye_ok and look_ok, "eye_idx=%d look_ok=%s" % [player._eye_camera_bone_idx, look_ok])
 
 	# --- Evaluate DLReference Parity Scorecard ---
 	print("\n================ DYING LIGHT 1 PARITY SCORECARD ================")

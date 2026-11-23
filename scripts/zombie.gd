@@ -13,6 +13,9 @@ var stagger_timer: float = 0.0
 var downed_timer: float = 0.0
 var knockback_vel: Vector3 = Vector3.ZERO
 var is_night_ref: bool = false
+# DodgeModule (0x144cea8, AIModule::m_DodgeProbability — AI zombie sidestep, distinct from Player MoveController dodge)
+var dodge_probability: float = 0.0
+var _ai_dodge_cd: float = 0.0
 
 var _spawn_pos: Vector3
 var _attack_timer: float = 0.0
@@ -50,6 +53,7 @@ func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_PAUSABLE
 	collision_layer = 4
 	collision_mask = 1 | 2 | 4 | 16
+	platform_floor_layers = 1
 	add_to_group("enemies")
 	_spawn_pos = global_position
 	max_hp = 150.0 if is_brute else 65.0
@@ -63,6 +67,20 @@ func configure(bunker: bool, brute: bool, night_runner: bool = false) -> void:
 	is_bunker_enemy = bunker
 	is_brute = brute
 	is_night_runner = night_runner
+	dodge_probability = 0.25 if (not brute and (bunker or night_runner)) else 0.0
+
+
+func try_ai_dodge(threat_dir: Vector3) -> bool:
+	if _is_dying or is_downed() or stagger_timer > 0.0 or _ai_dodge_cd > 0.0 or dodge_probability <= 0.0:
+		return false
+	if not is_active_state(is_night_ref):
+		return false
+	_ai_dodge_cd = 2.5
+	var flat := Vector3(threat_dir.x, 0.0, threat_dir.z)
+	var side := Vector3(-flat.z, 0.0, flat.x).normalized() if flat.length() > 0.05 else Vector3.RIGHT
+	knockback_vel = side * 5.5
+	stagger_timer = maxf(stagger_timer, 0.22)
+	return true
 
 
 func is_active_state(is_night: bool) -> bool:
@@ -296,6 +314,7 @@ func _physics_process(delta: float) -> void:
 	_attack_anim_timer = maxf(0.0, _attack_anim_timer - delta)
 	_grab_cd = maxf(0.0, _grab_cd - delta)
 	_lunge_cd = maxf(0.0, _lunge_cd - delta)
+	_ai_dodge_cd = maxf(0.0, _ai_dodge_cd - delta)
 	knockback_vel = knockback_vel.move_toward(Vector3.ZERO, 24.0 * delta)
 
 	if downed_timer > 0.0:

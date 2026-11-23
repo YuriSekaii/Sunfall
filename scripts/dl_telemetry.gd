@@ -7,6 +7,7 @@ const MAX_TRANSITIONS := 20
 var _frames: Array[Dictionary] = []
 var _transitions: Array[Dictionary] = []
 var _metrics: Dictionary = {}
+var _binary_events: Dictionary = {}
 var _last_state: String = ""
 var _last_frame: Dictionary = {}
 
@@ -19,10 +20,26 @@ func reset() -> void:
 	_frames.clear()
 	_transitions.clear()
 	_metrics.clear()
+	_binary_events = {
+		"last_landing_tier": 0,
+		"last_landing_shockwave": "none",
+		"last_slide_phase": "none",
+		"last_melee_sweep_hits": 0,
+		"last_nm_probe_band": 0,
+		"eye_camera_coupled": false,
+	}
 	_last_state = ""
 	_last_frame = {}
 	for key in DLReference.get_metric_keys():
 		_metrics[key] = -1.0
+
+
+func record_binary_event(key: String, val: Variant) -> void:
+	_binary_events[key] = val
+
+
+func get_binary_event(key: String, default_val: Variant = null) -> Variant:
+	return _binary_events.get(key, default_val)
 
 
 func record_frame(t: float, state: String, pos: Vector3, vel: Vector3, on_floor: bool, fitness: float, stamina: float, fov: float) -> void:
@@ -117,6 +134,13 @@ func format_overlay_text() -> String:
 			_frames.size(),
 			MAX_FRAMES,
 		])
+		lines.append("Slide: %s | LandTier: %d (%s) | SweepHits: %d | EyeCam: %s" % [
+			String(_binary_events.get("last_slide_phase", "none")),
+			int(_binary_events.get("last_landing_tier", 0)),
+			String(_binary_events.get("last_landing_shockwave", "none")),
+			int(_binary_events.get("last_melee_sweep_hits", 0)),
+			"ON" if bool(_binary_events.get("eye_camera_coupled", false)) else "PROC",
+		])
 	else:
 		lines.append("DL1 TELEMETRY | Waiting for frames...")
 
@@ -148,6 +172,7 @@ func dump_json(path: String) -> bool:
 		"frames": _frames,
 		"transitions": _transitions,
 		"metrics": _metrics,
+		"binary_events": _binary_events,
 		"comparison": get_comparison_rows(),
 	}
 	var f := FileAccess.open(path, FileAccess.WRITE)

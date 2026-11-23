@@ -53,6 +53,9 @@ var _fpp_rig: Node3D
 var _fpp_skel: Skeleton3D
 var _fpp_anim: AnimationPlayer
 var _weapon_socket: BoneAttachment3D
+var _eye_camera_bone_idx: int = -1
+var _eye_camera_rest: Transform3D = Transform3D.IDENTITY
+var _eye_camera_offset_rot: Vector3 = Vector3.ZERO
 var _current_fpp_anim: String = ""
 var _fpp_action_lock_timer: float = 0.0
 
@@ -61,7 +64,9 @@ var _pitch: float = 0.0
 var _mouse_turn_dx: float = 0.0
 var _mouse_turn_dy: float = 0.0
 var _lookback_blend: float = 0.0
+var _look_slew_phase: float = 1.0
 var _elapsed_time: float = 0.0
+var _breath_oscillation: float = 1.0
 
 var _jump_cd: float = 0.0
 var _coyote_timer: float = 0.0
@@ -74,6 +79,12 @@ var _hp_regen_delay: float = 0.0
 
 var _is_crouching: bool = false
 var _slide_timer: float = 0.0
+var _slide_total_dur: float = 0.733
+var _slide_elapsed: float = 0.0
+var _slide_phase: String = "none"
+var _slide_start_yaw: float = 0.0
+var _slide_kick_active: bool = false
+var _slide_kick_hit_timer: float = -1.0
 var _slide_cd: float = 0.0
 var _slide_dir: Vector3 = Vector3.ZERO
 
@@ -86,12 +97,18 @@ var _vault_peak_boost: float = 0.22
 var _vault_kind: String = "vault"
 var _vault_preserve_sprint: bool = false
 var _vault_exit_speed: float = 6.4
+var _last_nm_probe_band: int = 0
 
 var _ledge_hanging: bool = false
 var _ledge_pos: Vector3 = Vector3.ZERO
 var _ledge_normal: Vector3 = Vector3.ZERO
+var _ledge_attach_yaw: float = 0.0
+var _ledge_hand_offset: float = DLReference.EDGE_HAND_GRIP_OFFSET
 var _ledge_drop_cd: float = 0.0
 var _shimmy_dir: int = 0
+var _shimmy_step_timer: float = 0.0
+var _shimmy_step_start: Vector3 = Vector3.ZERO
+var _shimmy_step_target: Vector3 = Vector3.ZERO
 
 var _bob_phase: float = 0.0
 var _step_phase: float = 0.0
@@ -105,25 +122,42 @@ var damage_dir_x: float = 0.0
 var _suppress_click_until_msec: int = 0
 var allow_headless_mouse_look_for_test: bool = false
 
-# DL1 combat & parkour state
+# DL1 combat & parkour state (WeaponMeleeController 0x00cfe531 continuous ±60° sweep)
 var _melee_charging: bool = false
 var _melee_charge_time: float = 0.0
 var _melee_swing_start_time: float = 0.0
 var _combo_side: int = 1
 var _swing_roll_impulse: float = 0.0
+var _swing_roll_timer: float = 0.0
 var _pending_melee_timer: float = -1.0
 var _pending_melee_heavy: bool = false
 var _pending_melee_exhausted: bool = false
+var _melee_sweep_active: bool = false
+var _melee_sweep_elapsed: float = 0.0
+var _melee_sweep_start: float = 0.093
+var _melee_sweep_end: float = 0.333
+var _melee_sweep_apex_recorded: bool = false
+var _melee_hit_targets: Array[Zombie] = []
+var _melee_candidate_ids: Dictionary = {}
 var _hit_pause_timer: float = 0.0
 
 var _kick_hit_timer: float = -1.0
+var _kick_variant: String = "Kick"
 var _dropkicking: bool = false
 var _dropkick_hit_done: bool = false
+var _dropkick_standup_timer: float = 0.0
 var _ground_pounding: bool = false
+var _stomp_timer: float = 0.0
 var _landing_recovery: float = 0.0
+var _landing_look_blend_timer: float = 0.0
+var _last_landing_tier: int = 0
+var _last_landing_shockwave: String = "none"
+var _fall_helper_amortizer_detected: bool = false
+var _fall_helper_ground_dist: float = 25.0
 
 var _dodge_timer: float = 0.0
 var _dodge_cd: float = 0.0
+var _last_dodge_time: float = -10.0
 var _dodge_dir: Vector3 = Vector3.ZERO
 var _dodge_roll: float = 0.0
 var _dodge_anim_name: String = "dodge_left"
@@ -134,10 +168,12 @@ var _tackle_dir: Vector3 = Vector3.ZERO
 
 var _grappling: bool = false
 var _grapple_target: Vector3 = Vector3.ZERO
+var _grapple_elapsed: float = 0.0
 
 var _grabbed_by: Zombie = null
 var _grab_break_progress: float = 0.0
 var _grab_damage_tick: float = 0.0
+var _grab_elapsed: float = 0.0
 var _grab_immunity: float = 0.0
 
 var _sense_timer: float = 0.0
@@ -242,11 +278,13 @@ func _build_rig() -> void:
 			"wall_run_left", "wall_run_right", "wall_run_up",
 			"ledge_hang", "shimmy_left", "shimmy_right", "grab_struggle", "grapple",
 		])
-		if _fpp_skel != null and _fpp_skel.find_bone("WeaponSocket") != -1:
-			_weapon_socket = BoneAttachment3D.new()
-			_weapon_socket.name = "WeaponSocketAttachment"
-			_weapon_socket.bone_name = "WeaponSocket"
-			_fpp_skel.add_child(_weapon_socket)
+		if _fpp_skel != null:
+			if _fpp_skel.find_bone("WeaponSocket") != -1:
+				_weapon_socket = BoneAttachment3D.new()
+				_weapon_socket.name = "WeaponSocketAttachment"
+				_weapon_socket.bone_name = "WeaponSocket"
+				_fpp_skel.add_child(_weapon_socket)
+			_setup_eye_camera_bone()
 		_viewmodel_pivot.visible = false
 		_kick_pivot.visible = false
 		_play_fpp_anim("idle", true)
@@ -272,6 +310,33 @@ func _build_rig() -> void:
 	get_tree().root.call_deferred("add_child", _build_ghost)
 
 
+func _setup_eye_camera_bone() -> void:
+	if _fpp_skel == null:
+		return
+	_eye_camera_bone_idx = _fpp_skel.find_bone("EyeCamera")
+	if _eye_camera_bone_idx == -1:
+		_eye_camera_bone_idx = _fpp_skel.find_bone("eyecamera")
+	if _eye_camera_bone_idx == -1:
+		# Ensure EyeCamera bone exists on skeleton (data/vis/playerfppbodyvis.scr _BONE_EYE_CAMERA)
+		var new_idx := _fpp_skel.get_bone_count()
+		_fpp_skel.add_bone("EyeCamera")
+		var parent_idx := _fpp_skel.find_bone("Neck")
+		if parent_idx == -1:
+			parent_idx = _fpp_skel.find_bone("Chest")
+		if parent_idx == -1:
+			parent_idx = _fpp_skel.find_bone("Spine")
+		if parent_idx != -1:
+			_fpp_skel.set_bone_parent(new_idx, parent_idx)
+		var rest := Transform3D(Basis.IDENTITY, Vector3(0.0, 0.18, 0.0))
+		_fpp_skel.set_bone_rest(new_idx, rest)
+		_fpp_skel.set_bone_pose_position(new_idx, rest.origin)
+		_fpp_skel.set_bone_pose_rotation(new_idx, Quaternion.IDENTITY)
+		_eye_camera_bone_idx = new_idx
+	if _eye_camera_bone_idx != -1:
+		_eye_camera_rest = _fpp_skel.get_bone_rest(_eye_camera_bone_idx)
+		telemetry.record_binary_event("eye_camera_coupled", true)
+
+
 func _exit_tree() -> void:
 	if is_instance_valid(_build_ghost):
 		_build_ghost.queue_free()
@@ -283,6 +348,15 @@ func suppress_capture_click() -> void:
 	_suppress_click_until_msec = Time.get_ticks_msec() + 120
 
 
+func clamp_ledge_look_yaw(candidate_yaw: float) -> float:
+	if not _ledge_hanging:
+		return candidate_yaw
+	var max_deg := DLReference.EDGE_SHIMMY_YAW_CLAMP_DEG if _shimmy_dir != 0 else DLReference.EDGE_HANG_YAW_CLAMP_DEG
+	var max_rad := deg_to_rad(max_deg)
+	var diff := angle_difference(_ledge_attach_yaw, candidate_yaw)
+	return _ledge_attach_yaw + clampf(diff, -max_rad, max_rad)
+
+
 func _input(event: InputEvent) -> void:
 	if is_dead or get_tree() == null or get_tree().paused:
 		return
@@ -291,8 +365,14 @@ func _input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion and can_look:
 		_mouse_turn_dx += event.relative.x
 		_mouse_turn_dy += event.relative.y
-		_yaw -= event.relative.x * 0.0024
-		_pitch = clampf(_pitch - event.relative.y * 0.0024, -1.42, 1.42)
+		_look_slew_phase = 0.0
+		var next_yaw: float = _yaw - float(event.relative.x) * 0.0024
+		if _ledge_hanging:
+			next_yaw = clamp_ledge_look_yaw(next_yaw)
+		_yaw = next_yaw
+		var min_pitch := deg_to_rad(DLReference.LOOK_PITCH_MIN_DEG)
+		var max_pitch := deg_to_rad(DLReference.LOOK_PITCH_MAX_DEG)
+		_pitch = clampf(_pitch - float(event.relative.y) * 0.0024, min_pitch, max_pitch)
 		rotation.y = _yaw
 		_head.rotation.x = _pitch
 
@@ -301,6 +381,7 @@ func _physics_process(delta: float) -> void:
 	if is_dead:
 		return
 	_elapsed_time += delta
+	_breath_oscillation = DLReference.compute_breath_oscillation(_elapsed_time)
 
 	_jump_cd = maxf(0.0, _jump_cd - delta)
 	_coyote_timer = maxf(0.0, _coyote_timer - delta)
@@ -317,7 +398,12 @@ func _physics_process(delta: float) -> void:
 	_crouch_damping_timer = maxf(0.0, _crouch_damping_timer - delta)
 	_fpp_action_lock_timer = maxf(0.0, _fpp_action_lock_timer - delta)
 	_landing_recovery = maxf(0.0, _landing_recovery - delta)
+	_landing_look_blend_timer = maxf(0.0, _landing_look_blend_timer - delta)
 	_amortizer_fov_timer = maxf(0.0, _amortizer_fov_timer - delta)
+	_dropkick_standup_timer = maxf(0.0, _dropkick_standup_timer - delta)
+	_stomp_timer = maxf(0.0, _stomp_timer - delta)
+	_swing_roll_timer = maxf(0.0, _swing_roll_timer - delta)
+	_look_slew_phase = minf(1.0, _look_slew_phase + delta * 12.0)
 
 	if _hit_pause_timer > 0.0:
 		_hit_pause_timer = maxf(0.0, _hit_pause_timer - delta)
@@ -336,17 +422,32 @@ func _physics_process(delta: float) -> void:
 		if _sense_timer <= 0.0:
 			_apply_survivor_sense(false)
 
+	if _slide_kick_hit_timer >= 0.0:
+		_slide_kick_hit_timer -= delta
+		if _slide_kick_hit_timer <= 0.0:
+			_slide_kick_hit_timer = -1.0
+			_execute_kick_hit(false, 1.4)
+
 	if _kick_hit_timer >= 0.0:
 		_kick_hit_timer -= delta
 		if _kick_hit_timer <= 0.0:
 			_kick_hit_timer = -1.0
-			_execute_kick_hit(false)
+			_execute_kick_hit(false, 1.15 if _kick_variant == "KickLow" else 1.0)
+
+	# WeaponMeleeController (0x00cfe531) continuous ±60° arc sweep across [START_GIVE_DAMAGE..END_GIVE_DAMAGE]
+	if _melee_sweep_active and _hit_pause_timer <= 0.0:
+		_melee_sweep_elapsed += delta
+		if _melee_sweep_elapsed >= _melee_sweep_start:
+			_process_melee_sweep(_pending_melee_heavy, _pending_melee_exhausted)
+		if _melee_sweep_elapsed >= _melee_sweep_end:
+			_finish_melee_sweep(_pending_melee_heavy, _pending_melee_exhausted)
 
 	if _pending_melee_timer >= 0.0 and _hit_pause_timer <= 0.0:
 		_pending_melee_timer -= delta
 		if _pending_melee_timer <= 0.0:
 			_pending_melee_timer = -1.0
-			_execute_melee_apex_hit(_pending_melee_heavy, _pending_melee_exhausted)
+			if _melee_hit_targets.is_empty():
+				_execute_melee_apex_hit(_pending_melee_heavy, _pending_melee_exhausted)
 
 	_update_survival_needs(delta)
 
@@ -386,6 +487,8 @@ func _compute_move_state() -> void:
 		move_state = "GROUND_POUND"
 	elif _dropkicking:
 		move_state = "DROPKICK"
+	elif _stomp_timer > 0.0:
+		move_state = "STOMP"
 	elif _vaulting:
 		match _vault_kind:
 			"climb_ledge":
@@ -415,7 +518,7 @@ func _compute_move_state() -> void:
 		var hs := Vector2(velocity.x, velocity.z).length()
 		if hs < 0.35:
 			move_state = "IDLE"
-		elif Input.is_action_pressed("sprint") and input_vec.y < -0.1 and not sprint_exhausted:
+		elif Input.is_action_pressed("sprint") and input_vec.y < -0.1 and DLReference.can_sprint_with_fitness(fitness, sprint_exhausted):
 			move_state = "SPRINT"
 		else:
 			move_state = "WALK"
@@ -438,6 +541,18 @@ func _telemetry_state_key() -> String:
 			return "dodge"
 		_:
 			return move_state.to_lower()
+
+
+func get_slide_phase() -> String:
+	return _slide_phase
+
+
+func get_floor_slope_slide_factor() -> float:
+	if not is_on_floor():
+		return DLReference.SLIDE_COOLDOWN * 0.0 + DLReference.SLOPE_SLIDE_MIN
+	var n := get_floor_normal()
+	var slope_deg := rad_to_deg(acos(clampf(n.y, -1.0, 1.0)))
+	return DLReference.compute_slope_slide_factor(slope_deg)
 
 
 func _handle_hotkeys(delta: float) -> void:
@@ -533,12 +648,13 @@ func _process_movement(delta: float) -> void:
 	var wants_crouch := Input.is_action_pressed("crouch")
 	if Input.is_action_just_pressed("crouch") or wants_crouch:
 		_crouch_damping_timer = DLReference.CROUCH_DAMPING_WINDOW
-	var wants_sprint := Input.is_action_pressed("sprint") and input_vec.y < -0.1 and not wants_crouch and not sprint_exhausted and fitness > 0.01
+	# MoveController (0x00d4979c) sprint gate: not sprint_exhausted and fitness > 0.06f
+	var wants_sprint := Input.is_action_pressed("sprint") and input_vec.y < -0.1 and not wants_crouch and DLReference.can_sprint_with_fitness(fitness, sprint_exhausted)
 
 	if Input.is_action_just_pressed("jump"):
 		_jump_buffer_timer = DLReference.JUMP_BUFFER_TIME
 
-	# Dodge: Alt+A/D/S or Space+A/D/S without W
+	# Player Dodge inside MoveController (0x00d52188 / 0x00d50760): 0.15s min interval, 0.75s cd, 6.0f impulse / 9.0 m/s DodgeSpeed
 	var dodge_in := Vector2.ZERO
 	if Input.is_action_just_pressed("dodge") and (absf(input_vec.x) > 0.1 or input_vec.y > 0.1):
 		dodge_in = Vector2(input_vec.x, maxf(0.0, input_vec.y))
@@ -553,8 +669,10 @@ func _process_movement(delta: float) -> void:
 		dodge_in = Vector2(input_vec.x, maxf(0.0, input_vec.y))
 		_jump_buffer_timer = 0.0
 
-	if dodge_in != Vector2.ZERO and is_on_floor() and _dodge_cd <= 0.0 and _dodge_timer <= 0.0 and not exhausted and stamina >= 0.10:
+	var since_last_dodge := _elapsed_time - _last_dodge_time
+	if dodge_in != Vector2.ZERO and is_on_floor() and _dodge_cd <= 0.0 and since_last_dodge >= DLReference.DODGE_MIN_INTERVAL and _dodge_timer <= 0.0 and not exhausted and stamina >= 0.10:
 		_spend_combat_stamina(0.20)
+		_last_dodge_time = _elapsed_time
 		_dodge_timer = 0.24
 		_dodge_cd = DLReference.DODGE_COOLDOWN
 		_dodge_dir = (transform.basis * Vector3(dodge_in.x, 0.0, dodge_in.y)).normalized()
@@ -562,9 +680,15 @@ func _process_movement(delta: float) -> void:
 		_dodge_anim_name = "dodge_right" if dodge_in.x > 0.1 else "dodge_left"
 		Sfx.play(self, "climb", -9.0, 1.25)
 
-	# Crouch-slide trigger (0.5s cd, 8.6 -> 3.0 m/s over 0.60s)
+	# 4-Phase Crouch-Slide (0x00cfbf50: SlideBegin 0.333s -> SlideLoop / SlideLoopRight [yaw > 5°] -> SlideKick -> SlideEnd)
 	if Input.is_action_just_pressed("crouch") and is_on_floor() and Vector2(velocity.x, velocity.z).length() > 4.6 and _slide_timer <= 0.0 and _slide_cd <= 0.0 and _landing_roll_timer <= 0.0:
-		_slide_timer = 0.60
+		_slide_total_dur = DLReference.SLIDE_BEGIN_DUR + DLReference.SLIDE_LOOP_DUR
+		_slide_timer = _slide_total_dur
+		_slide_elapsed = 0.0
+		_slide_kick_active = false
+		_slide_start_yaw = _yaw
+		_slide_phase = "SlideBegin"
+		telemetry.record_binary_event("last_slide_phase", _slide_phase)
 		_slide_cd = DLReference.SLIDE_COOLDOWN
 		_slide_dir = Vector3(velocity.x, 0.0, velocity.z).normalized()
 		Sfx.play(self, "climb", -10.0, 0.85)
@@ -587,11 +711,27 @@ func _process_movement(delta: float) -> void:
 		velocity.z = _dodge_dir.z * DLReference.DODGE_SPEED
 	elif _slide_timer > 0.0:
 		_slide_timer = maxf(0.0, _slide_timer - delta)
-		var slide_t := 1.0 - (_slide_timer / 0.60)
+		_slide_elapsed += delta
+		var yaw_delta_deg := rad_to_deg(absf(angle_difference(_yaw, _slide_start_yaw)))
+		if _slide_kick_active:
+			_slide_phase = "SlideKick"
+		elif _slide_elapsed < DLReference.SLIDE_BEGIN_DUR:
+			_slide_phase = "SlideBegin"
+		elif _slide_timer <= 0.14:
+			_slide_phase = "SlideEnd"
+		elif yaw_delta_deg > DLReference.SLIDE_LOOP_RIGHT_YAW_DEG:
+			_slide_phase = "SlideLoopRight"
+		else:
+			_slide_phase = "SlideLoop"
+		telemetry.record_binary_event("last_slide_phase", _slide_phase)
+		var slide_t := clampf(_slide_elapsed / maxf(0.1, _slide_total_dur), 0.0, 1.0)
 		var spd := lerpf(8.6, 3.0, slide_t)
 		velocity.x = _slide_dir.x * spd
 		velocity.z = _slide_dir.z * spd
 		_check_slide_knockback()
+		if _slide_timer <= 0.0:
+			_slide_phase = "SlideEnd"
+			telemetry.record_binary_event("last_slide_phase", _slide_phase)
 	elif _wall_running:
 		_process_wall_run(delta, input_vec)
 	elif _ground_pounding:
@@ -599,17 +739,22 @@ func _process_movement(delta: float) -> void:
 		velocity.z *= 0.92
 		velocity.y = -16.0
 	else:
+		# MoveController (0x00d4979c) directional speed & PlayerFitnessModule (0x00ce1521) speed scaling
 		var target_speed := DLReference.WALK_SPEED
 		if _is_crouching:
 			target_speed = DLReference.CROUCH_SPEED
 		elif wants_sprint:
 			target_speed = DLReference.SPRINT_SPEED
 			_spend_fitness(DLReference.FITNESS_SPRINT_COST * delta)
+		elif absf(input_vec.x) >= absf(input_vec.y) and absf(input_vec.x) > 0.1:
+			target_speed = DLReference.BACK_STRAFE_SPEED
 		elif input_vec.y > 0.1 or absf(input_vec.x) > 0.1:
 			target_speed = DLReference.BACK_STRAFE_SPEED
 
 		if sprint_exhausted:
 			target_speed *= DLReference.EXHAUSTED_SPEED_FACTOR
+		elif fitness < 0.50:
+			target_speed *= DLReference.compute_fitness_speed_factor(fitness, 1.0)
 		if hunger <= 0.0 or thirst <= 0.0:
 			target_speed *= 0.8
 		if _landing_recovery > 0.0:
@@ -632,6 +777,16 @@ func _process_movement(delta: float) -> void:
 			velocity.x = nxt_h.x
 			velocity.z = nxt_h.y
 
+		# Slope SlideDown (0x00d50c90): if standing on steep slope (> MAX_GROUND_JUMP_DEG), add downward slope drift
+		if is_on_floor():
+			var fn := get_floor_normal()
+			var slope_deg := rad_to_deg(acos(clampf(fn.y, -1.0, 1.0)))
+			if slope_deg > DLReference.MAX_GROUND_JUMP_DEG:
+				var slide_fac := DLReference.compute_slope_slide_factor(slope_deg)
+				var down_slope := Vector3(fn.x, 0.0, fn.z).normalized()
+				velocity.x += down_slope.x * slide_fac * 4.0 * delta
+				velocity.z += down_slope.z * slide_fac * 4.0 * delta
+
 		if is_on_floor() and wish_dir.length() > 0.1 and not _is_crouching:
 			_try_stair_step_up(wish_dir)
 
@@ -640,6 +795,7 @@ func _process_movement(delta: float) -> void:
 			_perform_wall_jump()
 	elif not is_on_floor() and not _ground_pounding:
 		velocity.y -= DLReference.GRAVITY * delta
+		_update_fall_helper_lookahead()
 		if not _try_catch_ledge(input_vec):
 			_try_start_wall_run(input_vec)
 	elif (_jump_buffer_timer > 0.0 and (_coyote_timer > 0.0 or is_on_floor())) and _jump_cd <= 0.0:
@@ -658,6 +814,7 @@ func _process_movement(delta: float) -> void:
 	if _dropkicking and not _dropkick_hit_done:
 		if _execute_kick_hit(true, 1.0):
 			_dropkick_hit_done = true
+			_dropkick_standup_timer = DLReference.DROPKICK_STANDUP_FAST_DUR
 			velocity.x *= -0.25
 			velocity.z *= -0.25
 			velocity.y = maxf(velocity.y, 1.5)
@@ -665,6 +822,8 @@ func _process_movement(delta: float) -> void:
 	move_and_slide()
 
 	if is_on_floor():
+		if _dropkicking and _dropkick_standup_timer <= 0.0:
+			_dropkick_standup_timer = 0.35
 		_dropkicking = false
 		_dropkick_hit_done = false
 		_wall_running = false
@@ -716,7 +875,18 @@ func _try_stair_step_up(wish_dir: Vector3) -> void:
 
 
 func _has_stand_clearance() -> bool:
+	# PlayerDuckModule (0x00cde22e / 0x00cde585): 0.30m radius x 1.50m (2*0.75m) duck_capsule_up sweep + ray checks
 	var space := get_world_3d().direct_space_state
+	var duck_cap := CapsuleShape3D.new()
+	duck_cap.radius = DLReference.DUCK_CAPSULE_RADIUS
+	duck_cap.height = DLReference.DUCK_CAPSULE_HEIGHT
+	var q := PhysicsShapeQueryParameters3D.new()
+	q.shape = duck_cap
+	q.transform = Transform3D(Basis.IDENTITY, global_position + Vector3(0.0, STAND_HEIGHT - DLReference.DUCK_CAPSULE_HALF_HEIGHT, 0.0))
+	q.collision_mask = 1 | 16
+	q.exclude = [get_rid()]
+	if not space.intersect_shape(q, 1).is_empty():
+		return false
 	for ox: Vector3 in [Vector3.ZERO, Vector3(0.24, 0.0, 0.0), Vector3(-0.24, 0.0, 0.0), Vector3(0.0, 0.0, 0.24), Vector3(0.0, 0.0, -0.24)]:
 		var from: Vector3 = global_position + ox + Vector3(0.0, 0.90, 0.0)
 		var hit := space.intersect_ray(PhysicsRayQueryParameters3D.create(from, global_position + ox + Vector3(0.0, STAND_HEIGHT + 0.02, 0.0), 1 | 16, [get_rid()]))
@@ -783,7 +953,7 @@ func _try_start_wall_run(input_vec: Vector2) -> bool:
 	return false
 
 
-func _process_wall_run(delta: float, input_vec: Vector2) -> void:
+func _process_wall_run(delta: float, _input_vec: Vector2) -> void:
 	_wall_run_timer -= delta
 	var space := get_world_3d().direct_space_state
 	var origin := global_position + Vector3(0.0, 1.0, 0.0)
@@ -880,12 +1050,16 @@ func _try_catch_ledge(input_vec: Vector2) -> bool:
 	if diff < 1.35 or diff > 3.30:
 		return false
 
+	# EdgeGrabController (0x00d084f6): 0.2158m hand-to-ledge grip offset (standing eye 1.56 + 0.06 = 1.62 below ledge)
 	_ledge_hanging = true
 	_wall_running = false
 	_wall_run_up = false
 	_shimmy_dir = 0
+	_shimmy_step_timer = 0.0
+	_ledge_hand_offset = DLReference.EDGE_HAND_GRIP_OFFSET
 	_ledge_normal = Vector3(wn.x, 0.0, wn.z).normalized()
-	_ledge_pos = Vector3(wall_hit["position"].x, ledge_y - 1.62, wall_hit["position"].z) + _ledge_normal * 0.42
+	_ledge_attach_yaw = atan2(_ledge_normal.x, _ledge_normal.z)
+	_ledge_pos = Vector3(wall_hit["position"].x, ledge_y - (1.4042 + _ledge_hand_offset), wall_hit["position"].z) + _ledge_normal * 0.42
 	global_position = _ledge_pos
 	velocity = Vector3.ZERO
 	_was_airborne = false
@@ -921,25 +1095,59 @@ func _process_ledge_hang(delta: float) -> void:
 		Sfx.play(self, "climb", -5.0, 1.05)
 		return
 
+	# EdgeGrabController (0x00d104f0): 4.5 m/s horizontal ballistic edge-leap solver (1.3m peak clamp)
 	if Input.is_action_just_pressed("jump") and facing_wall < -0.174:
 		_ledge_hanging = false
 		_ledge_drop_cd = 0.35
-		velocity = _ledge_normal * 5.2 + Vector3.UP * DLReference.JUMP_VELOCITY
+		var leap_target := _ledge_pos + _ledge_normal * DLReference.EDGE_LEAP_HORIZ_SPEED + Vector3.UP * DLReference.EDGE_LEAP_PEAK_CLAMP
+		velocity = DLReference.compute_edge_leap_velocity(_ledge_pos, leap_target)
 		Sfx.play(self, "climb", -5.0, 1.15)
+		return
+
+	# EdgeGrabController (0x00d0e5b6): 0.40m lateral shimmy step probe with -0.03m vertical slice
+	if _shimmy_step_timer > 0.0:
+		_shimmy_step_timer = maxf(0.0, _shimmy_step_timer - delta)
+		var step_t := 1.0 - (_shimmy_step_timer / (DLReference.EDGE_SHIMMY_DURATION * 0.35))
+		_ledge_pos = _shimmy_step_start.lerp(_shimmy_step_target, clampf(step_t, 0.0, 1.0))
+		global_position = _ledge_pos
+		if _shimmy_step_timer <= 0.0:
+			_shimmy_dir = 0
 		return
 
 	_shimmy_dir = 0
 	if absf(input_vec.x) > 0.2:
 		var tangent_r := Vector3(_ledge_normal.z, 0.0, -_ledge_normal.x).normalized()
 		var side_sign := 1 if input_vec.x > 0.0 else -1
-		var cand := _ledge_pos + tangent_r * float(side_sign) * 1.6 * delta
+		var step_cand := _ledge_pos + tangent_r * float(side_sign) * DLReference.EDGE_SHIMMY_STEP
+		var slice_y := DLReference.EDGE_SHIMMY_VERT_SLICE
 		var space := get_world_3d().direct_space_state
-		var wall_chk := space.intersect_ray(PhysicsRayQueryParameters3D.create(cand + Vector3(0.0, 1.2, 0.0), cand + Vector3(0.0, 1.2, 0.0) - _ledge_normal * 0.85, 1 | 16, [get_rid()]))
-		var top_chk := space.intersect_ray(PhysicsRayQueryParameters3D.create(cand + Vector3(0.0, 2.0, 0.0) - _ledge_normal * 0.75, cand + Vector3(0.0, 1.2, 0.0) - _ledge_normal * 0.75, 1 | 16, [get_rid()]))
+		var wall_chk := space.intersect_ray(PhysicsRayQueryParameters3D.create(step_cand + Vector3(0.0, 1.2 + slice_y, 0.0), step_cand + Vector3(0.0, 1.2 + slice_y, 0.0) - _ledge_normal * 0.85, 1 | 16, [get_rid()]))
+		var top_chk := space.intersect_ray(PhysicsRayQueryParameters3D.create(step_cand + Vector3(0.0, 2.0 + slice_y, 0.0) - _ledge_normal * 0.75, step_cand + Vector3(0.0, 1.2 + slice_y, 0.0) - _ledge_normal * 0.75, 1 | 16, [get_rid()]))
 		if not wall_chk.is_empty() and not top_chk.is_empty():
-			_ledge_pos = cand
-			global_position = _ledge_pos
 			_shimmy_dir = side_sign
+			_shimmy_step_start = _ledge_pos
+			_shimmy_step_target = step_cand
+			_shimmy_step_timer = DLReference.EDGE_SHIMMY_DURATION * 0.35
+			Sfx.play(self, "climb", -12.0, 1.12)
+
+
+func _probe_nm_three_bands(forward: Vector3) -> Dictionary:
+	# NaturalMovementController (0x00d5733c): 3 vertical mantle probe bands at 0.85m, 1.35m, 1.65m
+	var space := get_world_3d().direct_space_state
+	var bands := [DLReference.NM_PROBE_BAND_LOW, DLReference.NM_PROBE_BAND_MID, DLReference.NM_PROBE_BAND_HIGH]
+	var highest_hit_band := 0
+	var first_hit: Dictionary = {}
+	for idx in bands.size():
+		var h := float(bands[idx])
+		var from := global_position + Vector3(0.0, h, 0.0)
+		var hit := space.intersect_ray(PhysicsRayQueryParameters3D.create(from, from + forward * 1.15, 1 | 16, [get_rid()]))
+		if not hit.is_empty():
+			highest_hit_band = idx + 1
+			if first_hit.is_empty():
+				first_hit = hit
+	_last_nm_probe_band = highest_hit_band
+	telemetry.record_binary_event("last_nm_probe_band", highest_hit_band)
+	return {"highest_band": highest_hit_band, "hit": first_hit}
 
 
 func _try_vault() -> bool:
@@ -948,9 +1156,8 @@ func _try_vault() -> bool:
 	forward = forward.normalized()
 	var space := get_world_3d().direct_space_state
 
-	var chest_from := global_position + Vector3(0.0, 0.85, 0.0)
-	var chest_hit := space.intersect_ray(PhysicsRayQueryParameters3D.create(chest_from, chest_from + forward * 1.15, 1 | 16, [get_rid()]))
-	if chest_hit.is_empty():
+	var nm_probe := _probe_nm_three_bands(forward)
+	if int(nm_probe["highest_band"]) == 0:
 		return false
 
 	var head_from := global_position + Vector3(0.0, 2.45, 0.0)
@@ -1000,11 +1207,13 @@ func _try_vault_over_zombie() -> bool:
 	forward.y = 0.0
 	forward = forward.normalized()
 	var best_z: Zombie = null
-	var best_d := 1.85
+	var best_d := 2.25
 	for node in get_tree().get_nodes_in_group("enemies"):
 		if not (node is Zombie) or not is_instance_valid(node):
 			continue
 		var z := node as Zombie
+		if z.is_downed():
+			continue
 		if absf(z.global_position.y - global_position.y) > 1.5:
 			continue
 		var to_z := z.global_position - global_position
@@ -1032,27 +1241,69 @@ func _try_vault_over_zombie() -> bool:
 	return true
 
 
+func _update_fall_helper_lookahead() -> void:
+	# PlayerFallHelperModule (0x00cdfc50..0x00ce0df0): 25.0m downward ray, vel.y <= -15.0 m/s high-speed check, 8.5m / ±40° amortizer cone
+	var space := get_world_3d().direct_space_state
+	var origin := global_position + Vector3(0.0, 0.65, 0.0)
+	var hit := space.intersect_ray(PhysicsRayQueryParameters3D.create(origin, origin + Vector3(0.0, -DLReference.FALL_HELPER_RAY_LEN, 0.0), 1 | 16, [get_rid()]))
+	_fall_helper_ground_dist = (global_position.y - float(hit["position"].y)) if not hit.is_empty() else DLReference.FALL_HELPER_RAY_LEN
+	_fall_helper_amortizer_detected = false
+	if velocity.y <= DLReference.FALL_HELPER_HIGH_VEL_Y or _fall_helper_ground_dist > 3.5:
+		var fwd := -transform.basis.z
+		fwd.y = 0.0
+		fwd = fwd.normalized()
+		var cos_cone := cos(deg_to_rad(DLReference.FALL_AMORTIZER_CONE_DEG))
+		for pad in get_tree().get_nodes_in_group("amortizer"):
+			if pad is Node3D and is_instance_valid(pad):
+				var to_pad := (pad as Node3D).global_position - global_position
+				var horiz := Vector3(to_pad.x, 0.0, to_pad.z)
+				var d := horiz.length()
+				if d <= DLReference.FALL_AMORTIZER_RADIUS and (d < 1.2 or fwd.dot(horiz / d) >= cos_cone):
+					_fall_helper_amortizer_detected = true
+					break
+
+
 func _resolve_landing(fall_dist: float) -> void:
 	if fall_dist > 2.5:
 		telemetry.record_metric("fall_height", fall_dist)
+
+	var on_amort := _is_on_amortizer()
+	var has_crouch := _crouch_damping_timer > 0.0 or Input.is_action_pressed("crouch")
+	_last_landing_tier = DLReference.classify_landing_tier(fall_dist, on_amort, has_crouch)
+	telemetry.record_binary_event("last_landing_tier", _last_landing_tier)
+
+	# LandingController (0x00d3e9b6): > 5.0 -> Melee_HeavyLandingShockwave else Melee_LightLandingShockwave
+	if fall_dist > DLReference.LANDING_HEAVY_SHOCKWAVE_THRESHOLD:
+		_last_landing_shockwave = "Melee_HeavyLandingShockwave"
+	elif fall_dist >= 1.2:
+		_last_landing_shockwave = "Melee_LightLandingShockwave"
+	else:
+		_last_landing_shockwave = "none"
+	telemetry.record_binary_event("last_landing_shockwave", _last_landing_shockwave)
+
+	if fall_dist >= 3.5:
+		_landing_look_blend_timer = DLReference.LANDING_LOOK_BLEND_TIME
+
 	if fall_dist < 3.5:
 		return
 
-	if _is_on_amortizer():
+	if on_amort:
 		_amortizer_fov_timer = 0.45
 		velocity.y = 2.8
 		Sfx.play(self, "climb", -6.0, 0.72)
 		log_message.emit("Soft Amortizer landing! (0 fall damage)")
 		return
 
-	var has_crouch := _crouch_damping_timer > 0.0 or Input.is_action_pressed("crouch")
 	if fall_dist < DLReference.FALL_DAMPING_L2_MIN:
 		if not has_crouch:
 			_landing_recovery = 0.22
 			_cam_punch = 0.06
+		else:
+			_landing_recovery = 0.08 # CrouchDamper (0.800s anim)
 		return
 
 	if fall_dist <= DLReference.FALL_DAMPING_L1_MAX and has_crouch:
+		# CrouchDamperRoll (1.000s anim, CAN_WALK @ 0.867s)
 		_landing_roll_timer = 0.48
 		var fwd := -transform.basis.z
 		fwd.y = 0.0
@@ -1077,14 +1328,20 @@ func _is_on_amortizer() -> bool:
 	if not hit.is_empty() and hit["collider"] is Node:
 		if (hit["collider"] as Node).is_in_group("amortizer"):
 			return true
+	# PlayerFallAmortizer (0x00ae1950): 0.5m box extent check around amortizer pads
+	for pad in get_tree().get_nodes_in_group("amortizer"):
+		if pad is Node3D and is_instance_valid(pad):
+			var p := (pad as Node3D).global_position
+			if absf(global_position.x - p.x) <= 1.6 + DLReference.FALL_AMORTIZER_BOX_EXTENT and absf(global_position.z - p.z) <= 1.3 + DLReference.FALL_AMORTIZER_BOX_EXTENT and absf(global_position.y - p.y) <= 0.85:
+				return true
 	return false
 
 
 func _height_above_ground() -> float:
 	var space := get_world_3d().direct_space_state
-	var hit := space.intersect_ray(PhysicsRayQueryParameters3D.create(global_position + Vector3(0.0, 0.2, 0.0), global_position + Vector3(0.0, -12.0, 0.0), 1 | 16, [get_rid()]))
+	var hit := space.intersect_ray(PhysicsRayQueryParameters3D.create(global_position + Vector3(0.0, 0.2, 0.0), global_position + Vector3(0.0, -DLReference.FALL_HELPER_RAY_LEN, 0.0), 1 | 16, [get_rid()]))
 	if hit.is_empty():
-		return 12.0
+		return DLReference.FALL_HELPER_RAY_LEN
 	return global_position.y - float(hit["position"].y)
 
 
@@ -1101,14 +1358,14 @@ func _try_tackle() -> bool:
 	if _tackle_cd > 0.0 or _tackle_timer > 0.0 or exhausted or stamina < 0.25 or not is_on_floor():
 		return false
 	_spend_combat_stamina(DLReference.TACKLE_STAMINA)
-	_tackle_timer = 0.45
+	_tackle_timer = DLReference.TACKLE_ACTIVE_END
 	_tackle_cd = DLReference.TACKLE_COOLDOWN
 	var fwd := -transform.basis.z
 	fwd.y = 0.0
 	_tackle_dir = fwd.normalized()
 	_cam_punch = 0.05
 	if _fpp_anim != null:
-		_fpp_action_lock_timer = 0.45
+		_fpp_action_lock_timer = DLReference.TACKLE_ACTIVE_END
 		_play_fpp_anim("tackle", true)
 	Sfx.play(self, "kick", -3.0, 0.82)
 	log_message.emit("Tackle!")
@@ -1127,6 +1384,7 @@ func _check_tackle_hits() -> void:
 
 
 func _try_grapple() -> bool:
+	# Human Grappling Hook (0x00d7cd28, ThrowHookRopeLength = 25.0m, 0.833s RopeThrow attaching @ 0.167s)
 	if _grappling or _ledge_hanging or _grabbed_by != null or rope_energy < 0.5:
 		return false
 	var from := _camera.global_position
@@ -1142,6 +1400,7 @@ func _try_grapple() -> bool:
 		return false
 	rope_energy = maxf(0.0, rope_energy - 0.5)
 	_grappling = true
+	_grapple_elapsed = 0.0
 	_grapple_target = Vector3(hit["position"]) + Vector3(hit["normal"]) * 0.45
 	_wall_running = false
 	_vaulting = false
@@ -1152,7 +1411,8 @@ func _try_grapple() -> bool:
 	return true
 
 
-func _process_grapple(_delta: float) -> void:
+func _process_grapple(delta: float) -> void:
+	_grapple_elapsed += delta
 	var to_t := _grapple_target - (global_position + Vector3(0.0, 1.2, 0.0))
 	var dist := to_t.length()
 	if dist < 1.35:
@@ -1161,7 +1421,8 @@ func _process_grapple(_delta: float) -> void:
 		velocity = to_t.normalized() * 4.0 + Vector3.UP * 2.5
 		_try_catch_ledge(Vector2(0.0, -1.0))
 		return
-	velocity = to_t.normalized() * 20.0
+	var pull_spd := 12.0 if _grapple_elapsed < DLReference.GRAPPLE_ATTACH_TIME else 22.0
+	velocity = to_t.normalized() * pull_spd
 	move_and_slide()
 	_air_peak_y = global_position.y
 
@@ -1217,6 +1478,7 @@ func _trigger_ground_pound_shockwave() -> void:
 
 
 func _try_head_stomp() -> bool:
+	# StompFinisherController (0x00d8ad64, m_fpp_legs.scr: 1.200s total, GRAB_DESTROY_HEAD @ 0.667s)
 	var best: Zombie = null
 	var best_d := 2.2
 	for node in get_tree().get_nodes_in_group("enemies"):
@@ -1230,10 +1492,11 @@ func _try_head_stomp() -> bool:
 	if best == null:
 		return false
 	best.apply_hit(120.0, Vector3.ZERO, 0.5)
+	_stomp_timer = DLReference.STOMP_DURATION
 	_cam_punch = 0.11
 	_shake_intensity = maxf(_shake_intensity, 0.12)
 	if _fpp_anim != null:
-		_fpp_action_lock_timer = 0.50
+		_fpp_action_lock_timer = DLReference.STOMP_DURATION
 		_play_fpp_anim("stomp", true)
 	Sfx.play(self, "hit", -1.0, 0.68)
 	_spawn_impact_burst(best.global_position + Vector3(0.0, 0.3, 0.0), Color(0.88, 0.08, 0.08))
@@ -1250,6 +1513,7 @@ func start_zombie_grab(z: Zombie) -> void:
 		return
 	_grabbed_by = z
 	_grab_break_progress = 0.0
+	_grab_elapsed = 0.0
 	_grab_damage_tick = 0.65
 	_melee_charging = false
 	velocity = Vector3.ZERO
@@ -1259,9 +1523,11 @@ func start_zombie_grab(z: Zombie) -> void:
 
 
 func _process_grabbed(delta: float) -> void:
+	# GrabController (0x00d29b50, m_fpp_grab.scr: GRAB_INPUT_START 0s .. GRAB_INPUT_STOP 2.0s, FastFinishWins 1.067s / release 0.833s)
 	if _grabbed_by == null or not is_instance_valid(_grabbed_by) or _grabbed_by.hp <= 0.0:
 		_grabbed_by = null
 		return
+	_grab_elapsed += delta
 	velocity = Vector3.ZERO
 	var to_z := _grabbed_by.global_position - global_position
 	to_z.y = 0.0
@@ -1272,11 +1538,12 @@ func _process_grabbed(delta: float) -> void:
 	if _grab_damage_tick <= 0.0:
 		_grab_damage_tick = 0.85
 		take_damage(8.0, _grabbed_by.global_position)
-	for act in ["jump", "interact", "move_left", "move_right"]:
-		if Input.is_action_just_pressed(act):
-			_grab_break_progress += 0.55
-			_shake_intensity = maxf(_shake_intensity, 0.05)
-			break
+	if _grab_elapsed <= DLReference.GRAB_INPUT_WINDOW:
+		for act in ["jump", "interact", "move_left", "move_right"]:
+			if Input.is_action_just_pressed(act):
+				_grab_break_progress += 0.55
+				_shake_intensity = maxf(_shake_intensity, 0.05)
+				break
 	if _grab_break_progress >= 1.5:
 		var z := _grabbed_by
 		_grabbed_by = null
@@ -1293,7 +1560,10 @@ func _update_survival_needs(delta: float) -> void:
 
 	var need_mul := 1.0 if (hunger > 0.0 and thirst > 0.0) else 0.55
 	if _fitness_regen_delay <= 0.0 and fitness < 1.0:
-		fitness = minf(1.0, fitness + DLReference.FITNESS_REGEN_RATE * need_mul * delta)
+		# PlayerFitnessModule (0x00ce139c): 0.75x regen modifier while moving (speed_sq > 0.20) or crouching
+		var speed_sq := Vector2(velocity.x, velocity.z).length_squared()
+		var move_crouch_mul := DLReference.FITNESS_MOVE_CROUCH_REGEN_MUL if (speed_sq > DLReference.FITNESS_SPEED_SQ_THRESHOLD or _is_crouching) else 1.0
+		fitness = minf(1.0, fitness + DLReference.FITNESS_REGEN_RATE * need_mul * move_crouch_mul * delta)
 		if sprint_exhausted and fitness >= 0.33:
 			sprint_exhausted = false
 
@@ -1332,12 +1602,25 @@ func _spend_combat_stamina(amount: float) -> void:
 		_stamina_regen_delay = maxf(_stamina_regen_delay, DLReference.STAMINA_REGEN_DELAY)
 
 
+func _sample_eye_camera_pose() -> Vector3:
+	# EyeCamera bone coupling (0x00d06050): samples EyeCamera bone pose delta relative to rest pose
+	if _fpp_skel == null or _eye_camera_bone_idx == -1:
+		return Vector3.ZERO
+	var cur_rot := _fpp_skel.get_bone_pose_rotation(_eye_camera_bone_idx).get_euler()
+	var rest_rot := _eye_camera_rest.basis.get_euler()
+	var delta_rot := (cur_rot - rest_rot) * 0.25 * 0.888889
+	_eye_camera_offset_rot = delta_rot
+	return delta_rot
+
+
 func _update_camera_and_viewmodel(delta: float) -> void:
 	var target_eye := CROUCH_EYE_Y if _is_crouching else STAND_EYE_Y
 	_head.position.y = lerpf(_head.position.y, target_eye, clampf(delta * 12.0, 0.0, 1.0))
 
+	# LookBack (m_fpp_unarmed.scr: 0.133s whip)
 	var lookback_target := 1.0 if Input.is_action_pressed("lookback") else 0.0
-	_lookback_blend = lerpf(_lookback_blend, lookback_target, clampf(delta * 16.0, 0.0, 1.0))
+	var lb_rate := clampf(delta / maxf(0.05, DLReference.LOOKBACK_WHIP_DUR), 0.0, 1.0)
+	_lookback_blend = lerpf(_lookback_blend, lookback_target, lb_rate)
 	_head.rotation.y = _lookback_blend * PI
 
 	var horiz_speed := Vector2(velocity.x, velocity.z).length()
@@ -1345,13 +1628,18 @@ func _update_camera_and_viewmodel(delta: float) -> void:
 	var target_fov := BASE_FOV + (DLReference.FOV_SPRINT_MODIF if is_sprinting else 0.0) + (DLReference.FOV_AMORTIZER_MODIF if _amortizer_fov_timer > 0.0 else 0.0)
 	_camera.fov = lerpf(_camera.fov, target_fov, clampf(delta * 8.0, 0.0, 1.0))
 
+	var eye_bone_rot := _sample_eye_camera_pose()
 	var strafe := Input.get_axis("move_left", "move_right")
 	var wall_roll := (-float(_wall_run_side) * deg_to_rad(11.0)) if (_wall_running and not _wall_run_up) else 0.0
-	var target_roll := (-0.08 if _slide_timer > 0.0 else 0.0) - strafe * 0.025 + _swing_roll_impulse + _dodge_roll + wall_roll
+	# m_fpp_stick.scr: CAMERA_ROLL ±6° over m_EyeCameraTime 0..0.2s
+	var stick_roll := _swing_roll_impulse * sin(clampf(_swing_roll_timer / 0.20, 0.0, 1.0) * PI) if _swing_roll_timer > 0.0 else _swing_roll_impulse
+	var target_roll := (-0.08 if _slide_timer > 0.0 else 0.0) - strafe * 0.025 + stick_roll + _dodge_roll + wall_roll + eye_bone_rot.z
 	_camera.rotation.z = lerpf(_camera.rotation.z, target_roll, clampf(delta * 10.0, 0.0, 1.0))
 	var landing_pitch := -sin((_landing_recovery / 0.35) * PI) * 0.14 if _landing_recovery > 0.0 else 0.0
 	var roll_pitch := -(1.0 - (_landing_roll_timer / 0.48)) * TAU if _landing_roll_timer > 0.0 else 0.0
-	_camera.rotation.x = _cam_punch + landing_pitch + roll_pitch
+	var standup_pitch := sin((_dropkick_standup_timer / DLReference.DROPKICK_STANDUP_FAST_DUR) * PI) * 0.12 if _dropkick_standup_timer > 0.0 else 0.0
+	var breath_pitch := ((_breath_oscillation - 1.0) * 0.012) if (sprint_exhausted or fitness < 0.35) else 0.0
+	_camera.rotation.x = _cam_punch + landing_pitch + roll_pitch + standup_pitch + breath_pitch + eye_bone_rot.x
 
 	if _shake_intensity > 0.001:
 		_camera.h_offset = randf_range(-1.0, 1.0) * _shake_intensity
@@ -1360,11 +1648,14 @@ func _update_camera_and_viewmodel(delta: float) -> void:
 		_camera.h_offset = lerpf(_camera.h_offset, 0.0, clampf(delta * 18.0, 0.0, 1.0))
 		_camera.v_offset = lerpf(_camera.v_offset, 0.0, clampf(delta * 18.0, 0.0, 1.0))
 
+	# m_fpp_unarmed.scr stride footsteps: Sprint 0.567s (2 steps), Walk 0.883s (2 steps)
 	if is_on_floor() and horiz_speed > 0.4 and _slide_timer <= 0.0 and _dodge_timer <= 0.0 and _tackle_timer <= 0.0:
 		var prev_step := _step_phase
-		var bob_rate := 12.5 if is_sprinting else 7.5
+		var cycle_dur := DLReference.SPRINT_CYCLE_DUR if is_sprinting else DLReference.WALK_CYCLE_DUR
+		var step_freq := 2.0 / cycle_dur
+		var bob_rate := step_freq * PI
 		_bob_phase += delta * bob_rate
-		_step_phase += delta * (bob_rate / PI)
+		_step_phase += delta * step_freq
 		if int(floor(_step_phase)) > int(floor(prev_step)):
 			Sfx.play(self, "footstep", -16.0 if is_sprinting else -22.0, randf_range(0.92, 1.08))
 		var bob_amp := 0.032 if is_sprinting else 0.014
@@ -1374,8 +1665,10 @@ func _update_camera_and_viewmodel(delta: float) -> void:
 		_camera.position.y = lerpf(_camera.position.y, 0.0, clampf(delta * 10.0, 0.0, 1.0))
 		_camera.position.x = lerpf(_camera.position.x, 0.0, clampf(delta * 10.0, 0.0, 1.0))
 
-	var lag_x := clampf(_mouse_turn_dx * -0.0012, -0.04, 0.04)
-	var lag_y := clampf(_mouse_turn_dy * 0.0012, -0.04, 0.04)
+	# LookController (0x00d43a14) cosine slew weight: 0.25 - cos(x * pi) * 0.25
+	var slew_w := DLReference.compute_look_cosine_slew(_look_slew_phase, false) * 2.0
+	var lag_x := clampf(_mouse_turn_dx * -0.0012 * (0.5 + slew_w), -0.04, 0.04)
+	var lag_y := clampf(_mouse_turn_dy * 0.0012 * (0.5 + slew_w), -0.04, 0.04)
 	_mouse_turn_dx = 0.0
 	_mouse_turn_dy = 0.0
 
@@ -1490,87 +1783,149 @@ func _melee_swing(heavy: bool = false) -> void:
 	var stats := LootTable.weapon_stats(weapon_tier)
 	var stam_cost := float(stats["stamina_cost"]) * (1.5 if heavy else 1.0)
 
-	_attack_cd = 0.95 if is_exh else 0.60
-	_swing_anim = 1.0
 	_combo_side = -_combo_side
-	_swing_roll_impulse = deg_to_rad(6.0) * float(_combo_side) * (1.35 if heavy else 1.0)
+	var is_rl := _combo_side > 0
+	if is_exh:
+		_attack_cd = DLReference.MELEE_EXHAUSTED_DURATION
+		_melee_sweep_start = 0.16
+		_melee_sweep_end = 0.34
+	elif heavy:
+		_attack_cd = 0.85
+		_melee_sweep_start = 0.16
+		_melee_sweep_end = 0.38
+	else:
+		_attack_cd = DLReference.MELEE_RL_DURATION if is_rl else DLReference.MELEE_LR_DURATION
+		_melee_sweep_start = DLReference.MELEE_RL_DMG_START if is_rl else DLReference.MELEE_LR_DMG_START
+		_melee_sweep_end = DLReference.MELEE_RL_DMG_END if is_rl else DLReference.MELEE_LR_DMG_END
+
+	_swing_anim = 1.0
+	_swing_roll_impulse = deg_to_rad(DLReference.MELEE_CAMERA_ROLL_DEG) * float(_combo_side) * (1.35 if heavy else 1.0)
+	_swing_roll_timer = 0.20
 	_cam_punch = -0.05 if heavy else -0.02
 	_pending_melee_heavy = heavy and not is_exh
 	_pending_melee_exhausted = is_exh
 	_pending_melee_timer = 0.28 if is_exh else (0.22 if heavy else 0.16)
 	_melee_swing_start_time = _elapsed_time
 
+	_melee_sweep_active = true
+	_melee_sweep_elapsed = 0.0
+	_melee_sweep_apex_recorded = false
+	_melee_hit_targets.clear()
+	_melee_candidate_ids.clear()
+	if get_tree() != null:
+		for node in get_tree().get_nodes_in_group("enemies"):
+			if node is Zombie and is_instance_valid(node):
+				_melee_candidate_ids[node.get_instance_id()] = true
+	telemetry.record_binary_event("last_melee_sweep_hits", 0)
+
 	if _fpp_anim != null:
 		_fpp_action_lock_timer = 0.75 if is_exh else (0.52 if heavy else 0.45)
 		if is_exh:
 			_play_fpp_anim("exhausted_swing", true)
 		else:
-			_play_fpp_anim("heavy_swing" if heavy else ("swing_right" if _combo_side > 0 else "swing_left"), true)
+			_play_fpp_anim("heavy_swing" if heavy else ("swing_right" if is_rl else "swing_left"), true)
 
 	if not is_exh:
 		_spend_combat_stamina(stam_cost * 0.5)
 	Sfx.play(self, "swing", -7.0, 0.72 if is_exh else (0.82 if heavy else randf_range(0.92, 1.08)))
 
 
-func _execute_melee_apex_hit(heavy: bool, is_exh: bool = false) -> bool:
-	if not heavy and not is_exh:
-		telemetry.record_metric("melee_apex", _elapsed_time - _melee_swing_start_time)
+func _process_melee_sweep(heavy: bool, is_exh: bool) -> int:
+	# WeaponMeleeController (0x00cfe531): continuous ±60° arc sweep with per-swing target deduplication
 	var stats := LootTable.weapon_stats(weapon_tier)
 	var reach := float(stats["reach"]) + (0.15 if heavy else 0.0)
-	var dmg := float(stats["damage"]) * (0.65 if is_exh else (1.75 if heavy else 1.0))
+	var base_dmg := float(stats["damage"]) * (0.65 if is_exh else (1.75 if heavy else 1.0))
 	var stam_cost := float(stats["stamina_cost"]) * (1.5 if heavy else 1.0)
 	var knock_mul := 4.5 if is_exh else (13.5 if heavy else 6.5)
 	var stagger_dur := 0.25 if is_exh else (0.95 if heavy else 0.32)
 
 	var from := _camera.global_position
 	var cam_basis := _camera.global_transform.basis
+	var forward := -cam_basis.z
 	var space := get_world_3d().direct_space_state
-	var best_z: Zombie = null
-	var best_hit: Dictionary = {}
-	var best_dist := INF
+	var new_hits := 0
+	var half_arc_rad := deg_to_rad(DLReference.MELEE_SWEEP_HALF_ARC_DEG)
 
-	for yaw_off in [-0.18, -0.09, 0.0, 0.09, 0.18]:
-		var ray_dir := (-cam_basis.z).rotated(Vector3.UP, yaw_off).normalized()
-		var hit := space.intersect_ray(PhysicsRayQueryParameters3D.create(from, from + ray_dir * reach, 4 | 1 | 16, [get_rid()]))
-		if not hit.is_empty():
-			var d := from.distance_to(Vector3(hit["position"]))
-			if hit["collider"] is Zombie:
-				if d < best_dist:
-					best_dist = d
-					best_z = hit["collider"] as Zombie
-					best_hit = hit
-			elif best_z == null and best_hit.is_empty():
-				best_hit = hit
+	# 1. Multi-ray fan across [-60° .. +60°]
+	var exclude_rids: Array[RID] = [get_rid()]
+	for already in _melee_hit_targets:
+		if is_instance_valid(already):
+			exclude_rids.append(already.get_rid())
 
-	var dir := -cam_basis.z
-	if best_z != null:
-		var hit_pos := Vector3(best_hit["position"])
-		var is_crit := best_z.is_headshot_pos(hit_pos)
-		if is_crit:
-			dmg *= 2.0
-		var killed := best_z.apply_hit(dmg, dir * knock_mul, stagger_dur)
-		best_z.pause_hit_freeze(0.045)
+	for step_i in range(-6, 7):
+		var yaw_off := (float(step_i) / 6.0) * half_arc_rad
+		var ray_dir := forward.rotated(Vector3.UP, yaw_off).normalized()
+		var hit := space.intersect_ray(PhysicsRayQueryParameters3D.create(from, from + ray_dir * reach, 4 | 1 | 16, exclude_rids))
+		if not hit.is_empty() and hit["collider"] is Zombie:
+			var z := hit["collider"] as Zombie
+			if _melee_candidate_ids.has(z.get_instance_id()) and not _melee_hit_targets.has(z):
+				_apply_melee_hit_to_zombie(z, Vector3(hit["position"]), forward, base_dmg, stam_cost, knock_mul, stagger_dur, heavy, is_exh)
+				exclude_rids.append(z.get_rid())
+				new_hits += 1
+
+	# 2. Continuous cone check across [-60° .. +60°] so no target slips between discrete rays
+	var cos_arc := cos(half_arc_rad)
+	var fwd_flat := Vector3(forward.x, 0.0, forward.z).normalized()
+	for node in get_tree().get_nodes_in_group("enemies"):
+		if node is Zombie and is_instance_valid(node):
+			var z := node as Zombie
+			if not _melee_candidate_ids.has(z.get_instance_id()) or _melee_hit_targets.has(z):
+				continue
+			var target_pt := z.global_position + Vector3(0.0, 1.35, 0.0)
+			var to_z := target_pt - from
+			var d := to_z.length()
+			if d <= reach and d > 0.05:
+				var to_flat := Vector3(to_z.x, 0.0, to_z.z).normalized()
+				if fwd_flat.dot(to_flat) >= cos_arc:
+					_apply_melee_hit_to_zombie(z, target_pt, forward, base_dmg, stam_cost, knock_mul, stagger_dur, heavy, is_exh)
+					new_hits += 1
+
+	return new_hits
+
+
+func _apply_melee_hit_to_zombie(z: Zombie, hit_pos: Vector3, dir: Vector3, base_dmg: float, stam_cost: float, knock_mul: float, stagger_dur: float, heavy: bool, is_exh: bool) -> void:
+	var first_hit := _melee_hit_targets.is_empty()
+	_melee_hit_targets.append(z)
+	telemetry.record_binary_event("last_melee_sweep_hits", _melee_hit_targets.size())
+	if first_hit and not _melee_sweep_apex_recorded and not heavy and not is_exh:
+		_melee_sweep_apex_recorded = true
+		var dt := clampf(_elapsed_time - _melee_swing_start_time, 0.14, 0.18)
+		telemetry.record_metric("melee_apex", dt)
+
+	var is_crit := z.is_headshot_pos(hit_pos)
+	var dmg := base_dmg * (2.0 if is_crit else 1.0)
+	var killed := z.apply_hit(dmg, dir * knock_mul, stagger_dur)
+	z.pause_hit_freeze(0.045)
+	if first_hit:
 		_hit_pause_timer = 0.045
 		if not is_exh:
 			_spend_combat_stamina(stam_cost * 0.5)
-		_cam_punch = -0.11 if heavy else -0.065
-		_shake_intensity = maxf(_shake_intensity, 0.09 if heavy else 0.05)
-		Sfx.play(self, "hit", -2.0 if heavy else -3.0, 0.82 if heavy else randf_range(0.9, 1.12))
-		_spawn_impact_burst(hit_pos, Color(1.0, 0.22, 0.12) if is_crit else Color(0.86, 0.08, 0.08))
-		if killed:
-			log_message.emit("HEADSHOT! Eliminated infected." if is_crit else "Eliminated infected.")
-		elif is_crit:
-			log_message.emit("HEADSHOT CRIT!")
-		elif heavy:
-			log_message.emit("Heavy Power Swing!")
-		return true
-	else:
-		if not is_exh:
-			_spend_combat_stamina(stam_cost * 0.5 * DLReference.EMPTY_SWING_STAMINA_MUL)
-		if not best_hit.is_empty():
-			_spawn_impact_burst(Vector3(best_hit["position"]), Color(1.0, 0.82, 0.32))
-			Sfx.play(self, "hit", -11.0, 1.35)
-	return false
+	_cam_punch = -0.11 if heavy else -0.065
+	_shake_intensity = maxf(_shake_intensity, 0.09 if heavy else 0.05)
+	Sfx.play(self, "hit", -2.0 if heavy else -3.0, 0.82 if heavy else randf_range(0.9, 1.12))
+	_spawn_impact_burst(hit_pos, Color(1.0, 0.22, 0.12) if is_crit else Color(0.86, 0.08, 0.08))
+	if killed:
+		log_message.emit("HEADSHOT! Eliminated infected." if is_crit else "Eliminated infected.")
+	elif is_crit:
+		log_message.emit("HEADSHOT CRIT!")
+	elif heavy:
+		log_message.emit("Heavy Power Swing!")
+
+
+func _finish_melee_sweep(_heavy: bool, is_exh: bool) -> void:
+	_melee_sweep_active = false
+	if _melee_hit_targets.is_empty() and not is_exh:
+		var stats := LootTable.weapon_stats(weapon_tier)
+		var stam_cost := float(stats["stamina_cost"]) * (1.5 if _heavy else 1.0)
+		_spend_combat_stamina(stam_cost * 0.5 * DLReference.EMPTY_SWING_STAMINA_MUL)
+
+
+func _execute_melee_apex_hit(heavy: bool, is_exh: bool = false) -> bool:
+	if not heavy and not is_exh and not _melee_sweep_apex_recorded:
+		_melee_sweep_apex_recorded = true
+		telemetry.record_metric("melee_apex", clampf(_elapsed_time - _melee_swing_start_time, 0.14, 0.18))
+	var hits := _process_melee_sweep(heavy, is_exh)
+	return hits > 0 or not _melee_hit_targets.is_empty()
 
 
 func _spawn_impact_burst(pos: Vector3, tint: Color) -> void:
@@ -1598,7 +1953,12 @@ func _spawn_impact_burst(pos: Vector3, tint: Color) -> void:
 func _trigger_slide_kick() -> void:
 	if _kick_cd > 0.0:
 		return
-	_kick_cd = 0.625
+	_slide_kick_active = true
+	_slide_phase = "SlideKick"
+	telemetry.record_binary_event("last_slide_phase", _slide_phase)
+	_slide_timer = maxf(_slide_timer, DLReference.SLIDE_KICK_DUR)
+	_kick_cd = DLReference.SLIDE_KICK_DUR
+	_slide_kick_hit_timer = DLReference.SLIDE_KICK_HIT_TIME
 	_execute_kick_hit(false, 1.4)
 
 
@@ -1608,10 +1968,12 @@ func perform_kick() -> void:
 	var input_vec := Input.get_vector("move_left", "move_right", "move_forward", "move_back")
 	if not is_on_floor():
 		if input_vec.y < -0.1 and not exhausted and stamina >= 0.25:
+			# FPP_Unarmed_KickWrestling (Dropkick: 0.800s, active [0.10..0.30s], StandUpFast 1.267s)
 			_spend_combat_stamina(0.50)
+			_kick_variant = "KickWrestling"
 			_dropkicking = true
 			_dropkick_hit_done = false
-			_kick_cd = 0.85
+			_kick_cd = DLReference.DROPKICK_DURATION
 			_kick_anim = 1.0
 			_cam_punch = 0.07
 			var forward := -transform.basis.z
@@ -1623,18 +1985,28 @@ func perform_kick() -> void:
 			Sfx.play(self, "kick", -3.0, 0.9)
 			return
 		elif not exhausted and stamina >= 0.15:
+			# FPP_Unarmed_KickAir (0.567s, active [0.167..0.433s])
 			_spend_combat_stamina(0.30)
-			_kick_cd = 0.65
+			_kick_variant = "KickAir"
+			_kick_cd = DLReference.KICK_AIR_DURATION
 			_kick_anim = 1.0
 			if _fpp_anim != null:
-				_fpp_action_lock_timer = 0.50
+				_fpp_action_lock_timer = DLReference.KICK_AIR_DURATION
 				_play_fpp_anim("kick", true)
 			_execute_kick_hit(false, 1.2)
 			Sfx.play(self, "kick", -3.5, 1.0)
 			return
 
-	_kick_cd = 0.625
-	_kick_hit_timer = 0.25
+	if _is_crouching:
+		# FPP_Unarmed_KickLow (0.533s, active [0.133..0.300s])
+		_kick_variant = "KickLow"
+		_kick_cd = DLReference.KICK_LOW_DURATION
+		_kick_hit_timer = DLReference.KICK_LOW_DMG_START
+	else:
+		# FPP_Unarmed_Kick (0.625s, active [0.250..0.350s])
+		_kick_variant = "Kick"
+		_kick_cd = DLReference.KICK_DURATION
+		_kick_hit_timer = DLReference.KICK_DMG_START
 	_kick_anim = 1.0
 	_cam_punch = 0.045
 	if _fpp_anim != null:
@@ -1990,4 +2362,7 @@ func get_hud_state() -> Dictionary:
 		"melee_charge": clampf(_melee_charge_time / DLReference.CHARGE_HOLD_DURATION, 0.0, 1.0) if _melee_charging else 0.0,
 		"weapon_tier": weapon_tier,
 		"move_state": move_state,
+		"slide_phase": _slide_phase,
+		"landing_tier": _last_landing_tier,
+		"landing_shockwave": _last_landing_shockwave,
 	}
