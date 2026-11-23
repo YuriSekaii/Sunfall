@@ -13,6 +13,11 @@ Follow these rules on every task in this repository:
    - `--headless --script res://tests/verify_prototype.gd` (must print `ALL CHECKS PASSED` and exit `0`).
 5. **Save mechanic exploration reports to `report/`**:
    - Report to `C:\Users\Admin\Desktop\Code\SelfMadeProduct\Game\Sunfall\report` (`report/`) for all insights and findings when exploring Dying Light, 7 Days to Die (7D2D), or The Forest game mechanics.
-6. **Read actual reference game files directly before implementing or tuning mechanics** (never guess or invent parameters):
+6. **Read actual reference game files directly before implementing or tuning mechanics — NEVER invent, guess, or improvise out-of-the-box mechanics or animations**:
+   - Dying Light 1 took a decade of engineering and already solved movement, combat feel, weapon inertia/rebound, and physical interaction. Every agent's job is strictly to inspect how Dying Light 1 actually works in its files/binaries and implement that exact system.
    - **Dying Light 1**: `D:\Program File\Dying.Light.v1.54.0_LinkNeverDie.Com.part3\Dying.Light.v1.54.0_LinkNeverDie.Com` (`DW/Data0.pak`..`Data3.pak`, `DW/Data/*.rpack`, `gamedll_x64_rwdi.dll`, `engine_x64_rwdi.dll`).
    - **7 Days to Die**: `D:\Program File\7.Days.To.Die.v3.3.0\7.Days.To.Die.v3.3.0\game`.
+7. **Use REA (`D:\Program File\rea`, `https://github.com/morluto/rea`)** as the primary reverse-engineering workflow for inspecting reference binaries and game artifacts:
+   - Entrypoint: `node "D:\Program File\rea\scripts\rea.mjs"` (or `rea` CLI / MCP once registered).
+   - Skill reference: `D:\Program File\rea\skills\reverse-engineer-anything\SKILL.md`.
+   - Runtime prerequisite: Node.js `22.x (>=22.23.4)`, `24.x (>=24.22.1)`, or `>=26.12.1`; fall back to Python `pefile`/`capstone` only when REA's Node prerequisite or native provider is unavailable, and report the blocker.

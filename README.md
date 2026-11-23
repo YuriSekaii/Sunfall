@@ -76,13 +76,13 @@ Calibrated directly from `DW/Data0.pak` and `gamedll_x64_rwdi.dll` reverse-engin
   * **Fitness**: Drains `0.10/s` sprinting and `0.10` per jump (`0.75s` delay / `5.0s` on empty, `2.0/s` regen, `0.75×` while moving/crouching); sprint gated by `fitness > 0.06` & non-exhausted, with smooth `0.8 + 0.2 * clamp((fitness - 0.2)/0.3, 0, 1)` speed curve.
   * **Combat Stamina**: `2.5s` delay / `4.0s` on empty, `1.5/s` regen, `0.6×` cost on miss; exhausted swings remain usable (`1.567s` cycle, `0.65×` dmg).
   * **Needs**: Max HP `100` (slow regen up to `25 HP`); Hunger `-0.16/s`, Thirst `-0.22/s` (`0` causes `-20%` speed and `-0.35 HP/s` down to `1 HP`).
-* **FPP Rig & Camera Coupling (`CameraFPPDI`, `LookController`, `player_dieselpunk_fpp`)**: Extracted real Dying Light 1 `player_dieselpunk_fpp` FPP mesh (`14,554` verts, hands + watch + legs + torso) with `21` bones incl. `WeaponSocket` and `EyeCamera` (`idx=14`), `29` `.scr`-timed clips (incl. `jump_air`), `LookParams` `[-89°, +70°]` pitch clamp with `playeraimlookparamsfpp.scr` spine pitch distribution (`1.0` up / `0.5 pow 1.2` down, `0.0` in jump), `LookController` cosine slew (`0.25 - cos(x*pi)*0.25`), `0.133s` `LookBack` whip, posture-aware torso clearance, and stride footsteps (`0.567s` sprint / `0.883s` walk).
+* **FPP Rig & Camera Coupling (`CameraFPPDI`, `LookController`, `player_dieselpunk_fpp`)**: Extracted real Dying Light 1 `player_dieselpunk_fpp` FPP mesh (`14,554` verts, `90` bones incl. `r_handholder` and `eyecamera`, `2FZn` per-draw artist skin weights) with `35` real decoded `ANM2` v42 motion-captured clips (`tools/extract_dl_anm2_glb.py`), `LookParams` `[-89°, +70°]` pitch clamp with `playeraimlookparamsfpp.scr` 4-bone spine pitch distribution (`spine`..`spine3`, `1.0` up / `0.5 pow 1.2` down, `0.0` in jump), `LookController` cosine slew (`0.25 - cos(x*pi)*0.25`), `0.133s` `LookBack` whip, and stride footsteps (`0.567s` sprint / `0.883s` walk).
 * **Live 30 FPS Vulkan Visual Capture (`tools/run_visual_harness.py`, `tests/live_visual_harness.gd`)**: Boots `scenes/main.tscn` in real Vulkan Forward+ (`-- --visual-capture=<dir>`), records 30 FPS sequential bursts across framing, sprint/jump, vault, high mantle, slide, dodge, melee, kick/dropkick/stomp, and 3rd-person sanity, and outputs labeled contact sheets + 30 FPS `.mp4` clips into `.gitignore`d `assets_ref/visual_debug/`.
 
-> **Development Rule (`AGENTS.md`)**: Every mechanic must be grounded by directly reading the actual Dying Light 1 / 7 Days to Die / The Forest game files (`report/dl1_re/`), never guessed.
+> **Development Rule (`AGENTS.md`)**: **NEVER invent, guess, or improvise mechanics or animations.** Always read and implement Dying Light 1 / 7 Days to Die's exact mechanics from their actual game files/binaries (`report/dl1_re/`), using **REA** (`D:\Program File\rea`, `node "D:\Program File\rea\scripts\rea.mjs"` on Node `22.23.4+`/`24.22.1+`/`26.12.1+`, or Python `pefile`/`capstone` fallback).
 
-### 2. Melee Combat & Weapons (`scripts/player.gd`, `scripts/loot_table.gd`)
-* **Continuous `±60°` Sweep, Headshots & Solid-Surface Bounce**: Light swings alternate RL (`0.600s`, hit `[0.093s..0.333s]`) and LR (`0.500s`, hit `[0.083s..0.333s]`) with `±6°` camera roll, active left-arm counterbalance, blade-streak trail, continuous `±60°` multi-target sweep + per-swing deduplication, `2.0×` Headshot Crits (`z.is_headshot_pos`), `0.055s`/`0.085s` hit-pause, directional crimson blood streaks + floor splatter decals, and solid-surface wall bounce + metallic sparks when striking walls/crates.
+### 2. Melee Combat & Weapons (`scripts/player.gd`, `scripts/loot_table.gd`, `scripts/zombie.gd`)
+* **4-Phase `m_fpp_stick.scr` Melee State Machine & `HitShort` Impact Rebound**: Light swings run `RL_Begin` (`0.100s`) → `RL_Empty` (`0.600s`, hit `[0.093s..0.333s]`) / `LR_Empty` (`0.500s`, hit `[0.083s..0.333s]`) with `r_handholder` weapon attachment, `±6°` camera roll, continuous `±60°` multi-target sweep + deduplication, `2.0×` Headshot Crits, `0.055s`/`0.085s` `HitPause` freeze, and immediate transition into real `M_FPP_Stick_HitShort.anm2` (`swing_rl_hit_middle` `0.03s` blend / `swing_lr_hit_middle` `0.05s` blend) on zombie or solid-surface impact (or `Empty_Rest` on miss). Infected play real `HitReactionModule` clips (`m_zombie_hitreaction_blunt_light/medium_head/heavy_left/right_01`, `0.09s` blend).
 * **Charged Heavy, Tackle & Ground Pound**: Hold `LMB >= 0.50s` for Heavy Swing (`1.667s`, `[0.667s..0.879s]`, `1.75×` dmg, `+0.15m` reach, `+2.0` upward launch). `Shift+E`/`Shift+RMB` tackles (`+6.0 m/s`, `0.40` stam, `1.0s` cd, knockdown). Airborne `LMB` looking down (`pitch < -0.35`) or `Ctrl+LMB` triggers Ground Pound (`-16 m/s`, `3.0m` shockwave knockdown, `32` dmg).
 * **Kick, Dropkick, Wall-Slam & Head Stomp**: Grounded `Q` (`0.625s`, `[0.25s..0.35s]`, `0` stam, `8` dmg, `+1.2` lift), `KickLow` (`0.533s`), Air Kick (`0.567s`, `0.30` stam), Dropkick (`0.800s`, `0.50` stam, `40` dmg, `15.5` horizontal + `4.2` vertical launch + `2.8s` knockdown + `1.267s` `StandUpFast`), and `StompFinisher` (`1.200s`, `120` dmg). Launched zombies experience spring-damped directional hit-lean, wall-slam impact damage (`+18.0` HP + knockdown), and zombie-into-zombie domino knockback.
 * **Zombie Grab & Fast Break**: Active non-biters within `1.25m` (`8s` cd) can grab the player (`2.0s` struggle input window); mash `Space/E/A/D` (`3` taps) to shove free (`1.067s` `FastFinishWins`) and stun the zombie for `3.0s`. Active AI zombies can also perform `DodgeModule` sidesteps.
@@ -133,6 +133,7 @@ Sunfall/
 │   ├── ensure_git.bat                # Portable git unpack & ZIP->clone bootstrap
 │   ├── extract_ref_assets.py         # 7D2D reference asset extractor
 │   ├── extract_dl_assets.py          # Dying Light RP6L archive & FPP player extractor
+│   ├── extract_dl_anm2_glb.py        # Direct DL1 2FZn + real ANM2 v42 -> GLB exporter
 │   ├── rig_and_animate_dl.py         # Blender 5.3.0 rigging (EyeCamera + 28 .scr-timed clips)
 │   ├── re_dl_data.py                 # Data0.pak / Data2.pak / .rpack catalog extractor
 │   ├── re_dl_binary.py               # gamedll_x64_rwdi.dll RTTI/VTable & disassembly mapper
@@ -142,7 +143,7 @@ Sunfall/
 │   ├── run_visual_harness.py         # Live 30 FPS Vulkan capture -> contact sheets & MP4 clips
 │   └── playtest_full_game.py         # Autonomous 4-act live Vulkan playtester via TCP JSON bridge
 ├── report/
-│   └── dl1_re/                       # Reverse-engineered Dying Light 1 specs (01..09)
+│   └── dl1_re/                       # Reverse-engineered Dying Light 1 specs (01..10)
 ├── scenes/
 │   └── main.tscn                     # Root world scene
 ├── scripts/

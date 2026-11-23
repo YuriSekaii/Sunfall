@@ -50,16 +50,19 @@ var _kick_pivot: Node3D
 var _build_ghost: MeshInstance3D
 var _grapple_beam: MeshInstance3D
 var _fpp_rig: Node3D
+var _fpp_rig_base_pos: Vector3 = Vector3(0.0, -0.112, 0.05)
 var _fpp_skel: Skeleton3D
 var _fpp_anim: AnimationPlayer
 var _weapon_socket: BoneAttachment3D
 var _eye_camera_bone_idx: int = -1
-var _spine_bone_idx: int = -1
-var _chest_bone_idx: int = -1
+var _spine_bone_indices: Array[int] = []
 var _eye_camera_rest: Transform3D = Transform3D.IDENTITY
 var _eye_camera_offset_rot: Vector3 = Vector3.ZERO
 var _current_fpp_anim: String = ""
 var _fpp_action_lock_timer: float = 0.0
+var _melee_phase: String = "IDLE"
+var _melee_phase_timer: float = 0.0
+var _melee_phase_is_rl: bool = true
 
 var _yaw: float = 0.0
 var _pitch: float = 0.0
@@ -276,6 +279,8 @@ func _build_rig() -> void:
 
 	_fpp_rig = RefAssets.instantiate_dl_player_fpp()
 	if _fpp_rig != null:
+		_fpp_rig.rotation.y = PI
+		_fpp_rig.position = _fpp_rig_base_pos
 		add_child(_fpp_rig)
 		_hide_head_meshes(_fpp_rig)
 		_fpp_anim = RefAssets.find_animation_player(_fpp_rig)
@@ -286,10 +291,11 @@ func _build_rig() -> void:
 			"ledge_hang", "shimmy_left", "shimmy_right", "grab_struggle", "grapple",
 		])
 		if _fpp_skel != null:
-			if _fpp_skel.find_bone("WeaponSocket") != -1:
+			var ws_bone := "r_handholder" if _fpp_skel.find_bone("r_handholder") != -1 else "WeaponSocket"
+			if _fpp_skel.find_bone(ws_bone) != -1:
 				_weapon_socket = BoneAttachment3D.new()
 				_weapon_socket.name = "WeaponSocketAttachment"
-				_weapon_socket.bone_name = "WeaponSocket"
+				_weapon_socket.bone_name = ws_bone
 				_fpp_skel.add_child(_weapon_socket)
 			_setup_eye_camera_bone()
 		_viewmodel_pivot.visible = false
@@ -356,24 +362,33 @@ func _setup_eye_camera_bone() -> void:
 	if _eye_camera_bone_idx != -1:
 		_eye_camera_rest = _fpp_skel.get_bone_rest(_eye_camera_bone_idx)
 		telemetry.record_binary_event("eye_camera_coupled", true)
-	_spine_bone_idx = _fpp_skel.find_bone("Spine")
-	_chest_bone_idx = _fpp_skel.find_bone("Chest")
-	if _chest_bone_idx != -1 and not _fpp_skel.skeleton_updated.is_connected(_on_fpp_skeleton_updated):
+	_spine_bone_indices.clear()
+	for bname: String in ["spine", "spine1", "spine2", "spine3"]:
+		var bi := _fpp_skel.find_bone(bname)
+		if bi != -1:
+			_spine_bone_indices.append(bi)
+	if _spine_bone_indices.is_empty():
+		for bname: String in ["Spine", "Chest"]:
+			var bi := _fpp_skel.find_bone(bname)
+			if bi != -1:
+				_spine_bone_indices.append(bi)
+	if not _spine_bone_indices.is_empty() and not _fpp_skel.skeleton_updated.is_connected(_on_fpp_skeleton_updated):
 		_fpp_skel.skeleton_updated.connect(_on_fpp_skeleton_updated)
 
 
 func _on_fpp_skeleton_updated() -> void:
-	if _fpp_skel == null or _chest_bone_idx == -1:
+	if _fpp_skel == null or _spine_bone_indices.is_empty():
 		return
 	# LookParams("Jump"): 0.0 vertical spine distribution while airborne; also skip during parkour/crouch/slide
 	if not is_on_floor() or _ledge_hanging or _vaulting or _landing_roll_timer > 0.0 or _slide_timer > 0.0 or _is_crouching:
 		return
 	var spine_pitch := DLReference.compute_fpp_spine_pitch(_pitch)
-	if _spine_bone_idx != -1:
-		var s_rot := _fpp_skel.get_bone_pose_rotation(_spine_bone_idx)
-		_fpp_skel.set_bone_pose_rotation(_spine_bone_idx, s_rot * Quaternion(Vector3.RIGHT, -spine_pitch * 0.35))
-	var c_rot := _fpp_skel.get_bone_pose_rotation(_chest_bone_idx)
-	_fpp_skel.set_bone_pose_rotation(_chest_bone_idx, c_rot * Quaternion(Vector3.RIGHT, -spine_pitch * 0.65))
+	var per_bone := spine_pitch / float(_spine_bone_indices.size())
+	var is_dl1_rig := _fpp_skel.find_bone("spine3") != -1
+	var pitch_axis := Vector3.BACK if is_dl1_rig else Vector3.RIGHT
+	for bi: int in _spine_bone_indices:
+		var s_rot := _fpp_skel.get_bone_pose_rotation(bi)
+		_fpp_skel.set_bone_pose_rotation(bi, s_rot * Quaternion(pitch_axis, per_bone if is_dl1_rig else -per_bone))
 
 
 func _exit_tree() -> void:
@@ -444,10 +459,7 @@ func _physics_process(delta: float) -> void:
 	_swing_roll_timer = maxf(0.0, _swing_roll_timer - delta)
 	_swing_trail_timer = maxf(0.0, _swing_trail_timer - delta)
 	if is_instance_valid(_swing_trail_mesh):
-		_swing_trail_mesh.visible = _swing_trail_timer > 0.0
-		if _swing_trail_mesh.visible:
-			var t_mat := _swing_trail_mesh.material_override as StandardMaterial3D
-			t_mat.albedo_color.a = clampf(_swing_trail_timer / 0.14, 0.0, 1.0) * 0.42
+		_swing_trail_mesh.visible = false
 	_look_slew_phase = minf(1.0, _look_slew_phase + delta * 12.0)
 
 	if _hit_pause_timer > 0.0:
@@ -455,6 +467,7 @@ func _physics_process(delta: float) -> void:
 	else:
 		_swing_anim = maxf(0.0, _swing_anim - delta * 4.2)
 		_kick_anim = maxf(0.0, _kick_anim - delta * (2.2 if _dropkicking else 3.2))
+		_advance_melee_phase(delta)
 
 	_swing_roll_impulse = lerpf(_swing_roll_impulse, 0.0, clampf(delta * 10.0, 0.0, 1.0))
 	_dodge_roll = lerpf(_dodge_roll, 0.0, clampf(delta * 10.0, 0.0, 1.0))
@@ -1738,20 +1751,16 @@ func _update_camera_and_viewmodel(delta: float) -> void:
 	_mouse_turn_dy = 0.0
 
 	if _fpp_rig != null:
-		var target_rig_pos := Vector3(0.0, 0.0, 0.16)
-		if _dropkicking:
-			target_rig_pos = Vector3(0.0, 0.24, -0.18)
-		elif _kick_anim > 0.05:
-			target_rig_pos = Vector3(0.0, 0.14, -0.08)
-		elif _slide_timer > 0.0:
-			target_rig_pos = Vector3(0.0, -0.52, 0.46)
+		var target_rig_pos := _fpp_rig_base_pos
+		if _slide_timer > 0.0:
+			target_rig_pos = _fpp_rig_base_pos + Vector3(0.0, -0.52, -0.30)
 		elif _is_crouching:
-			target_rig_pos = Vector3(0.0, -0.56, 0.46)
+			target_rig_pos = _fpp_rig_base_pos + Vector3(0.0, -0.56, -0.30)
 		elif _dodge_timer > 0.0:
-			target_rig_pos = Vector3(0.0, -0.04, 0.24)
+			target_rig_pos = _fpp_rig_base_pos + Vector3(0.0, -0.04, -0.06)
 		_fpp_rig.position = _fpp_rig.position.lerp(target_rig_pos, clampf(delta * 14.0, 0.0, 1.0))
-		_fpp_rig.rotation.y = lerpf(_fpp_rig.rotation.y, lag_x, clampf(delta * 12.0, 0.0, 1.0))
-		_fpp_rig.rotation.x = lerpf(_fpp_rig.rotation.x, lag_y, clampf(delta * 12.0, 0.0, 1.0))
+		_fpp_rig.rotation.y = lerpf(_fpp_rig.rotation.y, PI + lag_x, clampf(delta * 12.0, 0.0, 1.0))
+		_fpp_rig.rotation.x = lerpf(_fpp_rig.rotation.x, -lag_y, clampf(delta * 12.0, 0.0, 1.0))
 		_update_fpp_animation(horiz_speed)
 		return
 
@@ -1902,11 +1911,28 @@ func _melee_swing(heavy: bool = false) -> void:
 	telemetry.record_binary_event("last_melee_sweep_hits", 0)
 
 	if _fpp_anim != null:
-		_fpp_action_lock_timer = 0.75 if is_exh else (0.52 if heavy else 0.45)
+		var was_comboing := _melee_phase in ["REST", "HIT_MIDDLE"]
+		_melee_phase_is_rl = is_rl
 		if is_exh:
-			_play_fpp_anim("exhausted_swing", true)
+			_melee_phase = "REST"
+			_melee_phase_timer = 0.75
+			_fpp_action_lock_timer = 0.75
+			_play_fpp_anim("exhausted_swing", true, 0.15)
+		elif heavy:
+			_melee_phase = "SWING"
+			_melee_phase_timer = 0.65
+			_fpp_action_lock_timer = 0.65
+			_play_fpp_anim("heavy_swing", true, 0.10)
+		elif is_rl and not was_comboing and _fpp_anim.has_animation("swing_rl_begin"):
+			_melee_phase = "BEGIN"
+			_melee_phase_timer = 0.100
+			_fpp_action_lock_timer = 0.55
+			_play_fpp_anim("swing_rl_begin", true, 0.10)
 		else:
-			_play_fpp_anim("heavy_swing" if heavy else ("swing_right" if is_rl else "swing_left"), true)
+			_melee_phase = "SWING"
+			_melee_phase_timer = (DLReference.MELEE_RL_DURATION if is_rl else DLReference.MELEE_LR_DURATION) * 0.75
+			_fpp_action_lock_timer = _melee_phase_timer
+			_play_fpp_anim("swing_right" if is_rl else "swing_left", true, 0.10)
 
 	if not is_exh:
 		_spend_combat_stamina(stam_cost * 0.5)
@@ -1969,6 +1995,7 @@ func _process_melee_sweep(heavy: bool, is_exh: bool) -> int:
 		if not surf_hit.is_empty():
 			_world_hit_done = true
 			_hit_pause_timer = 0.048
+			_trigger_melee_hit_middle_rebound()
 			_cam_punch = 0.06
 			_shake_intensity = maxf(_shake_intensity, 0.07)
 			_swing_roll_impulse = -_swing_roll_impulse * 0.7
@@ -1977,6 +2004,48 @@ func _process_melee_sweep(heavy: bool, is_exh: bool) -> int:
 			_push_playtest_event("world_bounce", {"pos": [surf_hit["position"].x, surf_hit["position"].y, surf_hit["position"].z]})
 
 	return new_hits
+
+
+func _trigger_melee_hit_middle_rebound() -> void:
+	# m_fpp_stick.scr: FPP_Stick_Melee_Attack_{RL,LR}_Hit_Middle (M_FPP_Stick_HitShort.anm2, blend 0.03/0.05s, END_GIVE_DAMAGE @ 2f)
+	if _fpp_anim == null or _pending_melee_exhausted or _pending_melee_heavy:
+		return
+	if _melee_phase == "HIT_MIDDLE":
+		return
+	_melee_phase = "HIT_MIDDLE"
+	_melee_phase_timer = 0.433
+	_fpp_action_lock_timer = 0.433
+	_melee_sweep_end = minf(_melee_sweep_end, _melee_sweep_elapsed + 0.067)
+	var hit_clip := "swing_rl_hit_middle" if _melee_phase_is_rl else "swing_lr_hit_middle"
+	var blend_t := 0.03 if _melee_phase_is_rl else 0.05
+	if _fpp_anim.has_animation(hit_clip):
+		_play_fpp_anim(hit_clip, true, blend_t)
+
+
+func _advance_melee_phase(delta: float) -> void:
+	if _melee_phase == "IDLE":
+		return
+	_melee_phase_timer -= delta
+	if _melee_phase_timer > 0.0:
+		return
+	match _melee_phase:
+		"BEGIN":
+			_melee_phase = "SWING"
+			_melee_phase_timer = DLReference.MELEE_RL_DURATION * 0.72
+			_fpp_action_lock_timer = _melee_phase_timer
+			_play_fpp_anim("swing_right", true, 0.10)
+		"SWING":
+			if not _melee_hit_targets.is_empty() or _world_hit_done:
+				_melee_phase = "IDLE"
+			else:
+				_melee_phase = "REST"
+				_melee_phase_timer = 0.35
+				_fpp_action_lock_timer = 0.35
+				var rest_clip := "swing_rl_rest" if _melee_phase_is_rl else "swing_lr_rest"
+				if _fpp_anim != null and _fpp_anim.has_animation(rest_clip):
+					_play_fpp_anim(rest_clip, true, 0.10)
+		_:
+			_melee_phase = "IDLE"
 
 
 func _apply_melee_hit_to_zombie(z: Zombie, hit_pos: Vector3, dir: Vector3, base_dmg: float, stam_cost: float, knock_mul: float, stagger_dur: float, heavy: bool, is_exh: bool) -> void:
@@ -1993,10 +2062,11 @@ func _apply_melee_hit_to_zombie(z: Zombie, hit_pos: Vector3, dir: Vector3, base_
 	var right_flat := Vector3(transform.basis.x.x, 0.0, transform.basis.x.z).normalized()
 	var slash_dir := (Vector3(dir.x, 0.0, dir.z).normalized() * 0.72 + right_flat * float(-_combo_side) * 0.28).normalized()
 	var launch_y := 2.0 if heavy else 0.0
-	var killed := z.apply_hit(dmg, slash_dir * knock_mul, stagger_dur, _combo_side, launch_y)
+	var killed := z.apply_hit(dmg, slash_dir * knock_mul, stagger_dur, _combo_side, launch_y, is_crit)
 	z.pause_hit_freeze(0.055 if not heavy else 0.085)
 	if first_hit:
 		_hit_pause_timer = 0.055 if not heavy else 0.085
+		_trigger_melee_hit_middle_rebound()
 		if not is_exh:
 			_spend_combat_stamina(stam_cost * 0.5)
 	_cam_punch = -0.11 if heavy else -0.065

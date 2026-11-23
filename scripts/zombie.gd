@@ -109,11 +109,12 @@ func _build_visuals() -> void:
 	var dl_key := "dl_zombie_goon" if is_brute else ("dl_zombie_volatile" if (is_bunker_enemy or is_night_runner) else "dl_zombie_biter")
 	_dl_rig = RefAssets.instantiate_dl_zombie(dl_key)
 	if _dl_rig != null:
+		_dl_rig.rotation.y = PI
 		if is_brute:
 			_dl_rig.scale = Vector3(1.22, 1.22, 1.22)
 		add_child(_dl_rig)
 		_anim_player = RefAssets.find_animation_player(_dl_rig)
-		RefAssets.set_loop_mode_for_clips(_anim_player, ["idle_sunlight", "shamble", "chase_run"])
+		RefAssets.set_loop_mode_for_clips(_anim_player, ["idle", "idle_sunlight", "walk", "shamble", "run", "chase_run"])
 		_collect_dl_meshes(_dl_rig)
 		_flash_overlay_mat = StandardMaterial3D.new()
 		_flash_overlay_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
@@ -250,13 +251,30 @@ func _collect_dl_meshes(node: Node) -> void:
 		_collect_dl_meshes(child)
 
 
-func _play_anim(anim_name: String) -> void:
-	if _anim_player == null or not _anim_player.has_animation(anim_name):
+func _play_anim(anim_name: String, blend: float = 0.14, force: bool = false) -> void:
+	if _anim_player == null:
 		return
-	if _current_anim == anim_name and _anim_player.is_playing():
+	var target := anim_name
+	if not _anim_player.has_animation(target):
+		match anim_name:
+			"idle_sunlight":
+				target = "idle"
+			"shamble":
+				target = "walk"
+			"chase_run":
+				target = "run"
+			"attack_swipe":
+				target = "attack"
+			"knockdown":
+				target = "hit_heavy_right"
+			_:
+				target = "stagger"
+	if not _anim_player.has_animation(target):
 		return
-	_current_anim = anim_name
-	_anim_player.play(anim_name, 0.14)
+	if not force and _current_anim == target and _anim_player.is_playing():
+		return
+	_current_anim = target
+	_anim_player.play(target, blend)
 
 
 func _refresh_sunlight_visuals() -> void:
@@ -473,19 +491,26 @@ func _find_blocking_structure() -> Structure:
 	return best
 
 
-func apply_hit(damage: float, knockback: Vector3, stagger: float = 0.35, hit_dir_side: int = 0, launch_y: float = 0.0) -> bool:
+func apply_hit(damage: float, knockback: Vector3, stagger: float = 0.35, hit_dir_side: int = 0, launch_y: float = 0.0, is_headshot: bool = false) -> bool:
 	if _is_dying:
 		return false
 	hp -= damage
 	knockback_vel = Vector3(knockback.x, 0.0, knockback.z)
 	if launch_y > 0.0:
 		velocity.y = maxf(velocity.y, launch_y)
-	_hit_lean_rot = Vector3(0.28 if launch_y > 0.5 else 0.16, 0.0, float(-hit_dir_side) * 0.24)
+	if _dl_rig == null or _anim_player == null:
+		_hit_lean_rot = Vector3(0.28 if launch_y > 0.5 else 0.16, 0.0, float(-hit_dir_side) * 0.24)
 	stagger_timer = maxf(stagger_timer, stagger)
 	_flash_timer = 0.07
 	_refresh_sunlight_visuals()
 	if hp > 0.0 and not is_downed():
-		_play_anim("stagger")
+		var side_tag := "left" if hit_dir_side < 0 else "right"
+		var hit_clip := "hit_light_" + side_tag
+		if damage >= 45.0 or launch_y > 1.0:
+			hit_clip = "hit_heavy_" + side_tag
+		elif is_headshot or damage >= 28.0:
+			hit_clip = "hit_med_head_" + side_tag
+		_play_anim(hit_clip, 0.09, true)
 	if hp <= 0.0:
 		_is_dying = true
 		downed_timer = 0.0
