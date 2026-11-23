@@ -20,3 +20,6 @@ git_portable/
 # OS generated files
 .DS_Store
 Thumbs.db
+
+# Extracted prototype reference assets (copyrighted)
+assets_ref/

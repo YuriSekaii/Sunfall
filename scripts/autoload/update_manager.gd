@@ -1,0 +1,274 @@
+extends Node
+
+signal check_started()
+signal check_completed(up_to_date: bool, behind_count: int, changelog: Array, error_msg: String)
+signal update_started()
+signal update_completed(success: bool, message: String)
+
+var is_checking: bool = false
+var is_updating: bool = false
+var is_up_to_date: bool = true
+var commits_behind: int = 0
+var changelog_list: Array = []
+var current_commit_hash: String = "unknown"
+var current_branch_name: String = "main"
+var last_check_error: String = ""
+
+var _thread: Thread = null
+var _force_pull: bool = false
+var _git_bin: String = ""
+
+
+func _init() -> void:
+	_detect_local_git_info()
+
+
+func _enter_tree() -> void:
+	process_mode = Node.PROCESS_MODE_ALWAYS
+	_detect_local_git_info()
+
+
+func _ready() -> void:
+	_detect_local_git_info()
+
+
+func _exit_tree() -> void:
+	if _thread and _thread.is_alive():
+		_thread.wait_to_finish()
+
+
+func _get_project_dir() -> String:
+	return ProjectSettings.globalize_path("res://")
+
+
+func _get_git_exe() -> String:
+	if not _git_bin.is_empty():
+		return _git_bin
+	var out: Array = []
+	if OS.execute("git", ["--version"], out, true) == 0:
+		_git_bin = "git"
+		return _git_bin
+	var portable := _get_project_dir().path_join("git_portable/cmd/git.exe")
+	if FileAccess.file_exists(portable):
+		_git_bin = portable
+		return _git_bin
+	return ""
+
+
+func _detect_local_git_info() -> void:
+	var git_exe := _get_git_exe()
+	if git_exe.is_empty():
+		return
+	var proj_dir := _get_project_dir()
+	var out: Array = []
+
+	var err := OS.execute(git_exe, ["-C", proj_dir, "rev-parse", "--abbrev-ref", "HEAD"], out, true)
+	if err == 0 and out.size() > 0:
+		var branch := String(out[0]).strip_edges()
+		if not branch.is_empty():
+			current_branch_name = branch
+
+	out.clear()
+	err = OS.execute(git_exe, ["-C", proj_dir, "rev-parse", "--short", "HEAD"], out, true)
+	if err == 0 and out.size() > 0:
+		var commit := String(out[0]).strip_edges()
+		if not commit.is_empty():
+			current_commit_hash = commit
+
+
+# Windows Explorer / cloud sync tools drop hidden desktop.ini files into folders.
+# Inside .git/refs git reads them as refs ("fatal: bad object refs/desktop.ini"),
+# which breaks fetch and pull. They are never valid git data, so delete them.
+func _purge_desktop_ini(git_exe: String, proj_dir: String) -> void:
+	var out: Array = []
+	var err := OS.execute(git_exe, ["-C", proj_dir, "rev-parse", "--absolute-git-dir"], out, true)
+	if err != 0 or out.is_empty():
+		return
+	var git_dir := String(out[0]).strip_edges()
+	if not git_dir.is_empty():
+		_purge_desktop_ini_in(git_dir)
+
+
+func _purge_desktop_ini_in(dir_path: String) -> void:
+	var dir := DirAccess.open(dir_path)
+	if dir == null:
+		return
+	dir.include_hidden = true
+	for file_name in dir.get_files():
+		if file_name.to_lower() == "desktop.ini":
+			dir.remove(file_name)
+	for sub_dir in dir.get_directories():
+		_purge_desktop_ini_in(dir_path.path_join(sub_dir))
+
+
+func check_for_updates() -> void:
+	if is_checking or is_updating:
+		return
+	if _thread and _thread.is_alive():
+		_thread.wait_to_finish()
+
+	is_checking = true
+	check_started.emit()
+
+	_thread = Thread.new()
+	_thread.start(_worker_check_updates)
+
+
+func _worker_check_updates() -> void:
+	var proj_dir := _get_project_dir()
+	var git_exe := _get_git_exe()
+	var out: Array = []
+
+	if git_exe.is_empty():
+		_finish_check.call_deferred(false, 0, [], "Git executable not found in PATH or git_portable.")
+		return
+
+	out.clear()
+	var err := OS.execute(git_exe, ["-C", proj_dir, "rev-parse", "--abbrev-ref", "HEAD"], out, true)
+	var branch := String(out[0]).strip_edges() if (err == 0 and out.size() > 0) else "main"
+	if branch == "HEAD" or branch.is_empty():
+		branch = "main"
+
+	out.clear()
+	err = OS.execute(git_exe, ["-C", proj_dir, "rev-parse", "--short", "HEAD"], out, true)
+	var commit := String(out[0]).strip_edges() if (err == 0 and out.size() > 0) else "unknown"
+
+	_purge_desktop_ini(git_exe, proj_dir)
+	out.clear()
+	err = OS.execute(git_exe, ["-C", proj_dir, "fetch", "origin", branch], out, true)
+	if err != 0:
+		out.clear()
+		err = OS.execute(git_exe, ["-C", proj_dir, "fetch", "origin"], out, true)
+		if err != 0:
+			var fetch_err := String(out[0]).strip_edges() if out.size() > 0 else "Unknown network error."
+			_finish_check.call_deferred(false, 0, [], "Could not reach update server: %s" % fetch_err, branch, commit)
+			return
+
+	out.clear()
+	var target_ref := "origin/" + branch
+	err = OS.execute(git_exe, ["-C", proj_dir, "rev-list", "HEAD.." + target_ref, "--count"], out, true)
+	if err != 0:
+		out.clear()
+		err = OS.execute(git_exe, ["-C", proj_dir, "rev-list", "HEAD..@{u}", "--count"], out, true)
+
+	var behind := 0
+	if err == 0 and out.size() > 0:
+		behind = int(String(out[0]).strip_edges())
+
+	var changelog: Array = []
+	if behind > 0:
+		out.clear()
+		var log_err := OS.execute(git_exe, ["-C", proj_dir, "log", "HEAD.." + target_ref, "--oneline", "-n", "10"], out, true)
+		if log_err == 0 and out.size() > 0:
+			var lines := String(out[0]).split("\n", false)
+			for line in lines:
+				var trimmed := line.strip_edges()
+				if not trimmed.is_empty():
+					changelog.append(trimmed)
+
+	_finish_check.call_deferred(behind == 0, behind, changelog, "", branch, commit)
+
+
+func _finish_check(up_to_date: bool, behind: int, cl: Array, err_msg: String, branch: String = "", commit: String = "") -> void:
+	if _thread:
+		_thread.wait_to_finish()
+
+	is_checking = false
+	is_up_to_date = up_to_date
+	commits_behind = behind
+	changelog_list = cl
+	last_check_error = err_msg
+	if not branch.is_empty():
+		current_branch_name = branch
+	if not commit.is_empty():
+		current_commit_hash = commit
+
+	check_completed.emit(up_to_date, behind, cl, err_msg)
+
+
+func pull_updates(force: bool = false) -> void:
+	if is_updating or is_checking:
+		return
+	if _thread and _thread.is_alive():
+		_thread.wait_to_finish()
+
+	_force_pull = force
+	is_updating = true
+	update_started.emit()
+
+	_thread = Thread.new()
+	_thread.start(_worker_pull_updates)
+
+
+func _worker_pull_updates() -> void:
+	var proj_dir := _get_project_dir()
+	var git_exe := _get_git_exe()
+	if git_exe.is_empty():
+		_finish_pull.call_deferred(false, "Git executable not found in PATH or git_portable.", "")
+		return
+
+	var branch := current_branch_name if not current_branch_name.is_empty() else "main"
+	var out: Array = []
+	var pull_msg := ""
+	var success := false
+
+	if _force_pull:
+		_purge_desktop_ini(git_exe, proj_dir)
+		var err := OS.execute(git_exe, ["-C", proj_dir, "fetch", "origin", branch], out, true)
+		if err != 0:
+			out.clear()
+			err = OS.execute(git_exe, ["-C", proj_dir, "fetch", "origin"], out, true)
+		if err != 0:
+			pull_msg = String(out[0]).strip_edges() if out.size() > 0 else ""
+			_finish_pull.call_deferred(false, pull_msg, "")
+			return
+		out.clear()
+		err = OS.execute(git_exe, ["-C", proj_dir, "reset", "--hard", "origin/" + branch], out, true)
+		pull_msg = String(out[0]).strip_edges() if out.size() > 0 else "Successfully updated (force reset)."
+		success = (err == 0)
+	else:
+		_purge_desktop_ini(git_exe, proj_dir)
+		var err := OS.execute(git_exe, ["-C", proj_dir, "pull", "origin", branch], out, true)
+		if err != 0:
+			out.clear()
+			err = OS.execute(git_exe, ["-C", proj_dir, "pull"], out, true)
+		pull_msg = String(out[0]).strip_edges() if out.size() > 0 else ""
+		success = (err == 0)
+
+	var new_commit := ""
+	if success:
+		out.clear()
+		var c_err := OS.execute(git_exe, ["-C", proj_dir, "rev-parse", "--short", "HEAD"], out, true)
+		if c_err == 0 and out.size() > 0:
+			new_commit = String(out[0]).strip_edges()
+
+		# Auto-import newly pulled assets matching Play_Game.bat
+		var import_out: Array = []
+		OS.execute(OS.get_executable_path(), ["--headless", "--import", "--path", proj_dir], import_out, true)
+
+	_finish_pull.call_deferred(success, pull_msg, new_commit)
+
+
+func _finish_pull(success: bool, pull_msg: String, new_commit: String) -> void:
+	if _thread:
+		_thread.wait_to_finish()
+
+	is_updating = false
+	if success:
+		is_up_to_date = true
+		commits_behind = 0
+		changelog_list.clear()
+		if not new_commit.is_empty():
+			current_commit_hash = new_commit
+		update_completed.emit(true, "Successfully updated! Current commit is now %s." % current_commit_hash)
+	else:
+		update_completed.emit(false, "Update failed: %s" % pull_msg)
+
+
+func restart_game() -> void:
+	if OS.has_method("set_restart_on_exit"):
+		OS.set_restart_on_exit(true)
+		get_tree().quit()
+	else:
+		OS.create_process(OS.get_executable_path(), OS.get_cmdline_args())
+		get_tree().quit()
