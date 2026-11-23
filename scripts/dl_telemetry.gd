@@ -58,16 +58,16 @@ func record_frame(t: float, state: String, pos: Vector3, vel: Vector3, on_floor:
 
 	match state:
 		"walk":
-			if horiz_speed > 0.5:
+			if horiz_speed > 0.5 and horiz_speed <= 3.7:
 				record_metric("walk_speed", horiz_speed, true)
 		"sprint":
 			if horiz_speed > 0.5:
 				record_metric("sprint_speed", horiz_speed, true)
 		"strafe", "back":
-			if horiz_speed > 0.5:
+			if horiz_speed > 0.5 and horiz_speed <= 2.7:
 				record_metric("strafe_speed", horiz_speed, true)
 		"crouch":
-			if horiz_speed > 0.3:
+			if horiz_speed > 0.3 and horiz_speed <= 1.7:
 				record_metric("crouch_speed", horiz_speed, true)
 		"slide":
 			record_metric("slide_peak", horiz_speed, true)

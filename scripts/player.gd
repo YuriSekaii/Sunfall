@@ -509,7 +509,8 @@ func _process_vault(delta: float) -> void:
 		_vaulting = false
 		_was_airborne = false
 		_air_peak_y = global_position.y
-		telemetry.record_metric("vault_duration", _vault_dur)
+		if _vault_kind == "vault":
+			telemetry.record_metric("vault_duration", _vault_dur)
 		if _vault_preserve_sprint:
 			var fwd := -transform.basis.z
 			fwd.y = 0.0
@@ -616,7 +617,7 @@ func _process_movement(delta: float) -> void:
 
 		var accel := DLReference.MOVE_ACCEL
 		if not is_on_floor():
-			accel = DLReference.MOVE_ACCEL * DLReference.AIR_CONTROL
+			accel = (DLReference.MOVE_ACCEL * DLReference.AIR_CONTROL) if wish_dir.length() > 0.05 else 1.2
 		elif _is_crouching:
 			accel = DLReference.CROUCH_ACCEL if wish_dir.length() > 0.05 else DLReference.CROUCH_DECEL
 		elif wants_sprint:
@@ -654,9 +655,18 @@ func _process_movement(delta: float) -> void:
 		if not _try_catch_ledge(input_vec):
 			_try_vault()
 
+	if _dropkicking and not _dropkick_hit_done:
+		if _execute_kick_hit(true, 1.0):
+			_dropkick_hit_done = true
+			velocity.x *= -0.25
+			velocity.z *= -0.25
+			velocity.y = maxf(velocity.y, 1.5)
+
 	move_and_slide()
 
 	if is_on_floor():
+		_dropkicking = false
+		_dropkick_hit_done = false
 		_wall_running = false
 		_wall_run_up = false
 		_wall_jumps_used = 0
@@ -920,7 +930,7 @@ func _process_ledge_hang(delta: float) -> void:
 
 	_shimmy_dir = 0
 	if absf(input_vec.x) > 0.2:
-		var tangent_r := Vector3(-_ledge_normal.z, 0.0, _ledge_normal.x).normalized()
+		var tangent_r := Vector3(_ledge_normal.z, 0.0, -_ledge_normal.x).normalized()
 		var side_sign := 1 if input_vec.x > 0.0 else -1
 		var cand := _ledge_pos + tangent_r * float(side_sign) * 1.6 * delta
 		var space := get_world_3d().direct_space_state
@@ -965,7 +975,7 @@ func _try_vault() -> bool:
 		_vault_kind = "vault"
 		_vault_dur = 0.26
 		_vault_preserve_sprint = true
-		_vault_exit_speed = 6.4
+		_vault_exit_speed = DLReference.SPRINT_SPEED
 		_vault_peak_boost = 0.28
 		# Check obstacle depth: <= 1.0m vaults OVER, else vaults ON TOP
 		var far_probe := Vector3(down_hit["position"].x, ledge_y + 0.3, down_hit["position"].z) + forward * 1.05
@@ -1207,21 +1217,28 @@ func _trigger_ground_pound_shockwave() -> void:
 
 
 func _try_head_stomp() -> bool:
+	var best: Zombie = null
+	var best_d := 2.2
 	for node in get_tree().get_nodes_in_group("enemies"):
 		if node is Zombie and is_instance_valid(node):
 			var z := node as Zombie
-			if z.is_downed() and global_position.distance_to(z.global_position) <= 2.2:
-				z.apply_hit(120.0, Vector3.ZERO, 0.5)
-				_cam_punch = 0.11
-				_shake_intensity = maxf(_shake_intensity, 0.12)
-				if _fpp_anim != null:
-					_fpp_action_lock_timer = 0.50
-					_play_fpp_anim("stomp", true)
-				Sfx.play(self, "hit", -1.0, 0.68)
-				_spawn_impact_burst(z.global_position + Vector3(0.0, 0.3, 0.0), Color(0.88, 0.08, 0.08))
-				log_message.emit("Head Stomp!")
-				return true
-	return false
+			if z.is_downed():
+				var d := global_position.distance_to(z.global_position)
+				if d <= best_d:
+					best_d = d
+					best = z
+	if best == null:
+		return false
+	best.apply_hit(120.0, Vector3.ZERO, 0.5)
+	_cam_punch = 0.11
+	_shake_intensity = maxf(_shake_intensity, 0.12)
+	if _fpp_anim != null:
+		_fpp_action_lock_timer = 0.50
+		_play_fpp_anim("stomp", true)
+	Sfx.play(self, "hit", -1.0, 0.68)
+	_spawn_impact_burst(best.global_position + Vector3(0.0, 0.3, 0.0), Color(0.88, 0.08, 0.08))
+	log_message.emit("Head Stomp!")
+	return true
 
 
 func can_be_grabbed() -> bool:
@@ -1496,7 +1513,8 @@ func _melee_swing(heavy: bool = false) -> void:
 
 
 func _execute_melee_apex_hit(heavy: bool, is_exh: bool = false) -> bool:
-	telemetry.record_metric("melee_apex", _elapsed_time - _melee_swing_start_time)
+	if not heavy and not is_exh:
+		telemetry.record_metric("melee_apex", _elapsed_time - _melee_swing_start_time)
 	var stats := LootTable.weapon_stats(weapon_tier)
 	var reach := float(stats["reach"]) + (0.15 if heavy else 0.0)
 	var dmg := float(stats["damage"]) * (0.65 if is_exh else (1.75 if heavy else 1.0))
@@ -1626,12 +1644,18 @@ func perform_kick() -> void:
 
 
 func _execute_kick_hit(is_dropkick: bool, power_mul: float = 1.0) -> bool:
-	var from := _camera.global_position
 	var dir := -_camera.global_transform.basis.z
 	var reach := 2.9 if is_dropkick else 2.6
-	var hit := get_world_3d().direct_space_state.intersect_ray(
-		PhysicsRayQueryParameters3D.create(from, from + dir * reach, 4, [get_rid()])
-	)
+	var space := get_world_3d().direct_space_state
+	var origins: Array[Vector3] = [_camera.global_position]
+	if is_dropkick:
+		origins.append(global_position + Vector3(0.0, 0.90, 0.0))
+	var hit: Dictionary = {}
+	for from in origins:
+		var cand := space.intersect_ray(PhysicsRayQueryParameters3D.create(from, from + dir * reach, 4, [get_rid()]))
+		if not cand.is_empty() and cand["collider"] is Zombie:
+			hit = cand
+			break
 	if not hit.is_empty() and hit["collider"] is Zombie:
 		var z := hit["collider"] as Zombie
 		var knock := (23.0 if is_dropkick else 11.5) * power_mul

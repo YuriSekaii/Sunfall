@@ -145,6 +145,7 @@ Sunfall/
 │   ├── dl_reference.gd               # Dying Light 1 Data0.pak tuning constants & PASS/FAIL spec evaluator
 │   └── dl_telemetry.gd               # 60Hz movement ring-buffer, transition log, F3 scorecard & JSON dump
 ├── tests/
-│   └── verify_prototype.gd           # Headless SceneTree verification suite
+│   ├── verify_prototype.gd           # Headless SceneTree prototype & gameplay verification
+│   └── verify_dl_parity.gd           # Headless physics parity suite (12 DL1 metrics + 23 functional checks)
 └── assets_ref/                       # (.gitignore) Local extracted 3D/audio/icon assets
 ```
