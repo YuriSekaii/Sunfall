@@ -135,6 +135,7 @@ Sunfall/
 │   └── re_dl_binary.py               # gamedll_x64_rwdi.dll RTTI/VTable & disassembly mapper
 ├── docs/
 │   └── dl1_re/                       # Reverse-engineered Dying Light 1 data & binary specs (01..06)
+├── report/                           # Exploration insights & findings (Dying Light / 7D2D / The Forest)
 ├── scenes/
 │   └── main.tscn                     # Root world scene
 ├── scripts/

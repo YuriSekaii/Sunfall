@@ -11,3 +11,5 @@ Follow these rules on every task in this repository:
    - `--headless --import`
    - `--headless --check-only` on modified `.gd` scripts
    - `--headless --script res://tests/verify_prototype.gd` (must print `ALL CHECKS PASSED` and exit `0`).
+5. **Save mechanic exploration reports to `report/`**:
+   - Report to `C:\Users\Admin\Desktop\Code\SelfMadeProduct\Game\Sunfall\report` (`report/`) for all insights and findings when exploring Dying Light, 7 Days to Die (7D2D), or The Forest game mechanics.
