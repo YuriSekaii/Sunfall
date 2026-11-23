@@ -7,7 +7,7 @@
 ## 1. `NaturalMovementController` (`0x172e200`) — Vault, Jump-On, WallRun & WallJump
 
 ### 1.1 Entry & Dispatch Structure
-* **Base dispatch**: `NaturalMovementController` inherits `PlayerController`. The controller-type name switch `0x00d5dfc0` (IDs `0..42`) sits in its address band (full table in [`02_binary_function_map.md`](file:///c:/Users/Admin/Desktop/Code/SelfMadeProduct/Game/Sunfall/docs/dl1_re/02_binary_function_map.md) §3.3).
+* **Base dispatch**: `NaturalMovementController` inherits `PlayerController`. The controller-type name switch `0x00d5dfc0` (IDs `0..42`) sits in its address band (full table in [`02_binary_function_map.md`](file:///c:/Users/Admin/Desktop/Code/SelfMadeProduct/Game/Sunfall/report/dl1_re/02_binary_function_map.md) §3.3).
 * **State controller & probe helpers**: `slot[16]=0x00084150`, `slot[18]=0x00d58a70`, core parkour helpers `0x00d52c48`, `0x00d54f1e`, `0x00d5733c`, `0x00d57bc0` (`slot[2]`).
 
 ### 1.2 Observed Probe Heights, Look Locks, WallRun & Momentum XP

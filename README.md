@@ -63,7 +63,7 @@ Open the **Pause Menu (`Esc`)** and click **Check for Updates** (`scripts/autolo
 ## 🏃 Core Mechanic Systems
 
 ### 1. Dying Light 1 Movement & Parkour (`scripts/player.gd`, `scripts/dl_reference.gd`)
-Calibrated directly from `DW/Data0.pak` and `gamedll_x64_rwdi.dll` reverse-engineering specs in [`docs/dl1_re/`](docs/dl1_re/01_data_catalog.md):
+Calibrated directly from `DW/Data0.pak` and `gamedll_x64_rwdi.dll` reverse-engineering specs in [`report/dl1_re/`](report/dl1_re/01_data_catalog.md):
 * **Base Kinematics (`Data0.pak` & `MoveController`)**: Gravity `16.80 m/s²`, Jump `5.825 m/s` (`1.01m` apex, `0.40s` interval, `0.12s` coyote time, `0.15s` jump buffer), Walk `3.5 m/s`, Back/Strafe `2.5 m/s`, Sprint `6.0 m/s`, Crouch `1.5 m/s`, `50°` max slope, `0.51m` stair step-up, linear `move_toward` accel/decel (`40.0` ground, `10.0` sprint, `4.0/10.0` crouch, `0.22` air control), and slope slide-down ramp `clamp(slope_deg * 0.0175556 + 0.01, 0.01, 0.80)`.
 * **Real Crouch Capsule (`PlayerDuckModule`)**: Standing `1.75m` (eye `1.56m`) ↔ crouched/sliding `1.05m` (eye `0.90m`) with `0.30m × 1.50m` overhead `duck_capsule` clearance check before standing.
 * **4-Phase Slide & Dodge**: Slide progresses through `SlideBegin` (`0.333s`) → `SlideLoop` / `SlideLoopRight` (`> 5°` yaw delta, `0.400s`) → `SlideKick` (`0.567s`, hit @ `0.233s`) → `SlideEnd` (`0.481s`). Dodge (`0.15s` min interval, `0.75s` cd) fires a `6.0` impulse + `9.0 m/s` burst.
@@ -133,9 +133,8 @@ Sunfall/
 │   ├── rig_and_animate_dl.py         # Blender 5.3.0 rigging (EyeCamera + 28 .scr-timed clips)
 │   ├── re_dl_data.py                 # Data0.pak / Data2.pak / .rpack catalog extractor
 │   └── re_dl_binary.py               # gamedll_x64_rwdi.dll RTTI/VTable & disassembly mapper
-├── docs/
+├── report/
 │   └── dl1_re/                       # Reverse-engineered Dying Light 1 data & binary specs (01..06)
-├── report/                           # Exploration insights & findings (Dying Light / 7D2D / The Forest)
 ├── scenes/
 │   └── main.tscn                     # Root world scene
 ├── scripts/
