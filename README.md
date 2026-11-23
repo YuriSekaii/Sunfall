@@ -79,7 +79,9 @@ Calibrated directly from `DW/Data0.pak` and `gamedll_x64_rwdi.dll` reverse-engin
 * **FPP Rig & Camera Coupling (`CameraFPPDI`, `LookController`, `player_dieselpunk_fpp`)**: Extracted real Dying Light 1 `player_dieselpunk_fpp` FPP mesh (`14,554` verts, `90` bones incl. `r_handholder` and `eyecamera`, `2FZn` per-draw artist skin weights) with `35` real decoded `ANM2` v42 motion-captured clips (`tools/extract_dl_anm2_glb.py`), `LookParams` `[-89°, +70°]` pitch clamp with `playeraimlookparamsfpp.scr` 4-bone spine pitch distribution (`spine`..`spine3`, `1.0` up / `0.5 pow 1.2` down, `0.0` in jump), `LookController` cosine slew (`0.25 - cos(x*pi)*0.25`), `0.133s` `LookBack` whip, and stride footsteps (`0.567s` sprint / `0.883s` walk).
 * **Live 30 FPS Vulkan Visual Capture (`tools/run_visual_harness.py`, `tests/live_visual_harness.gd`)**: Boots `scenes/main.tscn` in real Vulkan Forward+ (`-- --visual-capture=<dir>`), records 30 FPS sequential bursts across framing, sprint/jump, vault, high mantle, slide, dodge, melee, kick/dropkick/stomp, and 3rd-person sanity, and outputs labeled contact sheets + 30 FPS `.mp4` clips into `.gitignore`d `assets_ref/visual_debug/`.
 
-> **Development Rule (`AGENTS.md`)**: **NEVER invent, guess, or improvise mechanics or animations.** Always read and implement Dying Light 1 / 7 Days to Die's exact mechanics from their actual game files/binaries (`report/dl1_re/`), using **REA** (`D:\Program File\rea`, `node "D:\Program File\rea\scripts\rea.mjs"` on Node `22.23.4+`/`24.22.1+`/`26.12.1+`, or Python `pefile`/`capstone` fallback).
+> **Development Rules (`AGENTS.md`)**:
+> - **NEVER invent, guess, or improvise mechanics or animations.** Always read and implement Dying Light 1 / 7 Days to Die's exact mechanics from their actual game files/binaries (`report/dl1_re/`), using **REA** (`D:\Program File\rea`, `node "D:\Program File\rea\scripts\rea.mjs"` with Ghidra 12.2 + JDK 25 on Node `24.22.3+`, or Python `pefile`/`capstone` fallback).
+> - **Write in Rust if it is better**: Use the `rust/` GDExtension crate (`godot-rust 0.5.6`, `api-4-7` → `addons/sunfall_rust/bin/sunfall_rust.dll`) for CPU/math/DSP/ring-buffer/simulation logic (`RustSfxSynth`, `RustLootTable`, `RustDLReference`, `RustDLTelemetry`), keeping thin scene/UI glue in GDScript. Rebuild with `cd rust && cargo test --lib && cargo build --release` and copy `target/release/sunfall_rust.dll` to `addons/sunfall_rust/bin/`.
 
 ### 2. Melee Combat & Weapons (`scripts/player.gd`, `scripts/loot_table.gd`, `scripts/zombie.gd`)
 * **4-Phase `m_fpp_stick.scr` Melee State Machine & `HitShort` Impact Rebound**: Light swings run `RL_Begin` (`0.100s`) → `RL_Empty` (`0.600s`, hit `[0.093s..0.333s]`) / `LR_Empty` (`0.500s`, hit `[0.083s..0.333s]`) with `r_handholder` weapon attachment, `±6°` camera roll, continuous `±60°` multi-target sweep + deduplication, `2.0×` Headshot Crits, `0.055s`/`0.085s` `HitPause` freeze, and immediate transition into real `M_FPP_Stick_HitShort.anm2` (`swing_rl_hit_middle` `0.03s` blend / `swing_lr_hit_middle` `0.05s` blend) on zombie or solid-surface impact (or `Empty_Rest` on miss). Infected play real `HitReactionModule` clips (`m_zombie_hitreaction_blunt_light/medium_head/heavy_left/right_01`, `0.09s` blend).
@@ -129,6 +131,9 @@ Sunfall/
 ├── Open_In_Godot_Editor.bat          # Godot Editor launcher
 ├── Push_To_GitHub.bat                # Push main branch to GitHub
 ├── engine.zip / git.zip              # Bundled Godot 4.7.2 & MinGit
+├── rust/                             # Rust GDExtension crate (godot-rust 0.5.6, api-4-7)
+│   └── src/                          # sfx.rs, loot_table.rs, dl_reference.rs, dl_telemetry.rs
+├── addons/sunfall_rust/              # GDExtension manifest & compiled sunfall_rust.dll
 ├── tools/
 │   ├── ensure_git.bat                # Portable git unpack & ZIP->clone bootstrap
 │   ├── extract_ref_assets.py         # 7D2D reference asset extractor

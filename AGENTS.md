@@ -21,3 +21,7 @@ Follow these rules on every task in this repository:
    - Entrypoint: `node "D:\Program File\rea\scripts\rea.mjs"` (or `rea` CLI / MCP once registered).
    - Skill reference: `D:\Program File\rea\skills\reverse-engineer-anything\SKILL.md`.
    - Runtime prerequisite: Node.js `22.x (>=22.23.4)`, `24.x (>=24.22.1)`, or `>=26.12.1`; fall back to Python `pefile`/`capstone` only when REA's Node prerequisite or native provider is unavailable, and report the blocker.
+8. **Write in Rust (`rust/`, `godot-rust` GDExtension `api-4-7`) if it is better**:
+   - Prefer Rust over GDScript for CPU-heavy loops, DSP/audio synthesis, deterministic math/physics kernels, binary/asset parsing, ring-buffers/telemetry, and performance- or safety-critical simulation logic.
+   - Keep thin Godot scene-tree/UI glue in GDScript where GDScript is simpler and faster to iterate.
+   - When modifying `rust/`, run `cargo test --lib` and `cargo build --release` in `rust/` and copy `rust/target/release/sunfall_rust.dll` to `addons/sunfall_rust/bin/sunfall_rust.dll` before Godot headless verification.

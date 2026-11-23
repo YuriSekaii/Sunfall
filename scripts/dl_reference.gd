@@ -190,54 +190,31 @@ const SPECS := {
 
 
 static func compute_slope_slide_factor(slope_deg: float) -> float:
-	if slope_deg <= 0.0:
-		return SLOPE_SLIDE_MIN
-	if slope_deg >= 45.0:
-		return SLOPE_SLIDE_MAX
-	return clampf(slope_deg * SLOPE_SLIDE_COEFF + SLOPE_SLIDE_MIN, SLOPE_SLIDE_MIN, SLOPE_SLIDE_MAX)
+	return RustDLReference.compute_slope_slide_factor(slope_deg)
 
 
 static func compute_fitness_speed_factor(cur_fitness: float, max_fitness: float = 1.0) -> float:
-	var denom := maxf(0.001, 0.3 * max_fitness)
-	return 0.8 + 0.2 * clampf((cur_fitness - 0.2 * max_fitness) / denom, 0.0, 1.0)
+	return RustDLReference.compute_fitness_speed_factor(cur_fitness, max_fitness)
 
 
 static func can_sprint_with_fitness(cur_fitness: float, is_sprint_exhausted: bool) -> bool:
-	return not is_sprint_exhausted and cur_fitness > FITNESS_SPRINT_GATE
+	return RustDLReference.can_sprint_with_fitness(cur_fitness, is_sprint_exhausted)
 
 
 static func compute_breath_oscillation(t: float) -> float:
-	return sin(deg_to_rad(t * FITNESS_BREATH_DEG_PER_SEC)) * FITNESS_BREATH_AMP + 1.0
+	return RustDLReference.compute_breath_oscillation(t)
 
 
 static func compute_look_cosine_slew(norm_t: float, branch_b: bool = false) -> float:
-	var w := 0.30 if branch_b else 0.25
-	return w - cos(clampf(norm_t, 0.0, 1.0) * PI) * w
+	return RustDLReference.compute_look_cosine_slew(norm_t, branch_b)
 
 
 static func compute_edge_leap_velocity(from_pos: Vector3, target_pos: Vector3) -> Vector3:
-	var delta := target_pos - from_pos
-	var horiz := Vector2(delta.x, delta.z)
-	var horiz_len := horiz.length()
-	var dir2 := (horiz / horiz_len) if horiz_len > 0.0001 else Vector2(0.0, -1.0)
-	var flight_t := maxf(0.18, horiz_len * 0.222222) # 1.0 / 4.5 m/s (0x00d104f0)
-	var clamped_dy := minf(delta.y, EDGE_LEAP_PEAK_CLAMP)
-	var vy := clampf((clamped_dy + 0.5 * GRAVITY * flight_t * flight_t) / flight_t, JUMP_VELOCITY * 0.85, JUMP_VELOCITY * 1.25)
-	return Vector3(dir2.x * EDGE_LEAP_HORIZ_SPEED, vy, dir2.y * EDGE_LEAP_HORIZ_SPEED)
+	return RustDLReference.compute_edge_leap_velocity(from_pos, target_pos)
 
 
 static func classify_landing_tier(fall_dist: float, on_amortizer: bool, has_crouch_damping: bool) -> int:
-	if fall_dist < 1.2:
-		return 0 # Tier 0: Soft step/hop
-	if on_amortizer:
-		return 1 # Tier 1: Amortizer cushion landing
-	if fall_dist < 3.5:
-		return 2 # Tier 2: Light landing (CrouchDamper if crouched)
-	if fall_dist < FALL_DAMPING_L2_MIN:
-		return 3 # Tier 3: Medium landing (> 5.0m emits heavy shockwave)
-	if fall_dist <= FALL_DAMPING_L1_MAX and has_crouch_damping:
-		return 4 # Tier 4: CrouchDamperRoll (360° parkour roll)
-	return 5 # Tier 5: Heavy/lethal impact landing
+	return RustDLReference.classify_landing_tier(fall_dist, on_amortizer, has_crouch_damping)
 
 
 # FPP Look/Aim pitch distribution (data/scripts/playeraimlookparamsfpp.scr)
@@ -257,43 +234,12 @@ const LAND_ROLL_CAN_WALK_RATIO := 26.0 / 30.0
 
 
 static func compute_fpp_spine_pitch(pitch_rad: float) -> float:
-	# playeraimlookparamsfpp.scr: 100% spine pitch looking up (+70°), 50% pow 1.2 looking down (-89°)
-	if pitch_rad >= 0.0:
-		return pitch_rad * LOOK_DIST_VERT_UP
-	var max_down := deg_to_rad(absf(LOOK_PITCH_MIN_DEG))
-	var norm := clampf(absf(pitch_rad) / max_down, 0.0, 1.0)
-	return -pow(norm, LOOK_DIST_VERT_DOWN_PARAM) * max_down * LOOK_DIST_VERT_DOWN
+	return RustDLReference.compute_fpp_spine_pitch(pitch_rad)
 
 
 static func get_metric_keys() -> PackedStringArray:
-	return PackedStringArray(METRIC_ORDER)
+	return RustDLReference.get_metric_keys()
 
 
 static func evaluate_metric(key: String, actual: float) -> Dictionary:
-	var cfg: Dictionary = SPECS.get(key, {})
-	var label := String(cfg.get("label", key))
-	var spec := float(cfg.get("spec", 0.0))
-	var tol := float(cfg.get("tol", 0.1))
-	var unit := String(cfg.get("unit", ""))
-
-	if cfg.is_empty() or actual < 0.0 or is_nan(actual):
-		return {
-			"key": key,
-			"label": label,
-			"spec": spec,
-			"tol": tol,
-			"actual": actual,
-			"unit": unit,
-			"status": "N/A",
-		}
-
-	var ok := absf(actual - spec) <= tol
-	return {
-		"key": key,
-		"label": label,
-		"spec": spec,
-		"tol": tol,
-		"actual": actual,
-		"unit": unit,
-		"status": "PASS" if ok else "FAIL",
-	}
+	return RustDLReference.evaluate_metric(key, actual)

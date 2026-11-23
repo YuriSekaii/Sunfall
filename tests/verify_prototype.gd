@@ -15,6 +15,12 @@ func _initialize() -> void:
 
 
 func _run_checks() -> void:
+	# 0. Verify Rust GDExtension native classes and PCM synth are loaded
+	for cls in [&"RustSfxSynth", &"RustLootTable", &"RustDLReference", &"RustDLTelemetry"]:
+		_check(ClassDB.class_exists(cls), "Rust GDExtension class '%s' must be loaded" % String(cls))
+	var pcm := RustSfxSynth.synth_pcm16(0.10, 340.0, 120.0, 0.5, 0.3, 22050)
+	_check(pcm.size() == 2205 * 2, "RustSfxSynth.synth_pcm16 must emit expected 16-bit PCM byte length")
+
 	# 1. LootTable determinism and non-empty items for crash, supply, lab
 	for pool in ["crash", "supply", "lab"]:
 		var roll_a := LootTable.roll_container(42424, 7, pool, 1)

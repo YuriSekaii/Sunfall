@@ -23,3 +23,6 @@ Thumbs.db
 
 # Extracted prototype reference assets (copyrighted)
 assets_ref/
+
+# Rust Cargo build artifacts (keep addons/sunfall_rust/bin/*.dll for zero-setup launch)
+rust/target/

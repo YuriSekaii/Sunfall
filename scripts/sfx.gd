@@ -65,24 +65,9 @@ static func _get_stream(key: String) -> AudioStreamWAV:
 
 
 static func _synth(duration: float, f0: float, f1: float, amp: float, noise_mix: float) -> AudioStreamWAV:
-	var count := maxi(1, int(duration * MIX_RATE))
-	var data := PackedByteArray()
-	data.resize(count * 2)
-	var phase := 0.0
-	var rng := RandomNumberGenerator.new()
-	rng.seed = int(f0 * 100.0 + f1)
-	for i in count:
-		var t := float(i) / float(count)
-		var env := (1.0 - t) * (1.0 - t)
-		var freq := lerpf(f0, f1, t)
-		phase += TAU * freq / float(MIX_RATE)
-		var tone := sin(phase)
-		var noise := rng.randf_range(-1.0, 1.0)
-		var sample := clampf((tone * (1.0 - noise_mix) + noise * noise_mix) * amp * env, -1.0, 1.0)
-		data.encode_s16(i * 2, int(sample * 32767.0))
 	var wav := AudioStreamWAV.new()
 	wav.format = AudioStreamWAV.FORMAT_16_BITS
 	wav.mix_rate = MIX_RATE
 	wav.stereo = false
-	wav.data = data
+	wav.data = RustSfxSynth.synth_pcm16(duration, f0, f1, amp, noise_mix, MIX_RATE)
 	return wav
