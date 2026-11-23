@@ -82,9 +82,9 @@ Calibrated directly from `DW/Data0.pak` and `gamedll_x64_rwdi.dll` reverse-engin
 > **Development Rule (`AGENTS.md`)**: Every mechanic must be grounded by directly reading the actual Dying Light 1 / 7 Days to Die / The Forest game files (`report/dl1_re/`), never guessed.
 
 ### 2. Melee Combat & Weapons (`scripts/player.gd`, `scripts/loot_table.gd`)
-* **Continuous `±60°` Sweep, Headshots & Active Windows**: Light swings alternate RL (`0.600s`, hit `[0.093s..0.333s]`) and LR (`0.500s`, hit `[0.083s..0.333s]`) with `±6°` camera roll, continuous `±60°` multi-target sweep + per-swing deduplication, `2.0×` Headshot Crits (`z.is_headshot_pos`), and `0.045s` hit-pause + particle bursts.
-* **Charged Heavy, Tackle & Ground Pound**: Hold `LMB >= 0.50s` for Heavy Swing (`1.667s`, `[0.667s..0.879s]`, `1.75×` dmg, `+0.15m` reach). `Shift+E`/`Shift+RMB` tackles (`+6.0 m/s`, `0.40` stam, `1.0s` cd, knockdown). Airborne `LMB` looking down (`pitch < -0.35`) or `Ctrl+LMB` triggers Ground Pound (`-16 m/s`, `3.0m` shockwave knockdown, `32` dmg).
-* **Kick, Dropkick & Head Stomp**: Grounded `Q` (`0.625s`, `[0.25s..0.35s]`, `0` stam, `8` dmg), `KickLow` (`0.533s`), Air Kick (`0.567s`, `0.30` stam), Dropkick (`0.800s`, `0.50` stam, `40` dmg, `23.0` knockback + `2.5s` knockdown + `1.267s` `StandUpFast`), and `StompFinisher` (`1.200s`, `120` dmg).
+* **Continuous `±60°` Sweep, Headshots & Solid-Surface Bounce**: Light swings alternate RL (`0.600s`, hit `[0.093s..0.333s]`) and LR (`0.500s`, hit `[0.083s..0.333s]`) with `±6°` camera roll, active left-arm counterbalance, blade-streak trail, continuous `±60°` multi-target sweep + per-swing deduplication, `2.0×` Headshot Crits (`z.is_headshot_pos`), `0.055s`/`0.085s` hit-pause, directional crimson blood streaks + floor splatter decals, and solid-surface wall bounce + metallic sparks when striking walls/crates.
+* **Charged Heavy, Tackle & Ground Pound**: Hold `LMB >= 0.50s` for Heavy Swing (`1.667s`, `[0.667s..0.879s]`, `1.75×` dmg, `+0.15m` reach, `+2.0` upward launch). `Shift+E`/`Shift+RMB` tackles (`+6.0 m/s`, `0.40` stam, `1.0s` cd, knockdown). Airborne `LMB` looking down (`pitch < -0.35`) or `Ctrl+LMB` triggers Ground Pound (`-16 m/s`, `3.0m` shockwave knockdown, `32` dmg).
+* **Kick, Dropkick, Wall-Slam & Head Stomp**: Grounded `Q` (`0.625s`, `[0.25s..0.35s]`, `0` stam, `8` dmg, `+1.2` lift), `KickLow` (`0.533s`), Air Kick (`0.567s`, `0.30` stam), Dropkick (`0.800s`, `0.50` stam, `40` dmg, `15.5` horizontal + `4.2` vertical launch + `2.8s` knockdown + `1.267s` `StandUpFast`), and `StompFinisher` (`1.200s`, `120` dmg). Launched zombies experience spring-damped directional hit-lean, wall-slam impact damage (`+18.0` HP + knockdown), and zombie-into-zombie domino knockback.
 * **Zombie Grab & Fast Break**: Active non-biters within `1.25m` (`8s` cd) can grab the player (`2.0s` struggle input window); mash `Space/E/A/D` (`3` taps) to shove free (`1.067s` `FastFinishWins`) and stun the zombie for `3.0s`. Active AI zombies can also perform `DodgeModule` sidesteps.
 
 | Tier | Weapon | Damage | Reach | Stamina Cost |
@@ -139,7 +139,8 @@ Sunfall/
 │   ├── re_dl_fluidity.py             # Data0.pak LookParams, playerfppbodyvis & blend-time extractor
 │   ├── inspect_dl_mesh_anim.py       # Binary 40B vertex weight/UV, DDS mip & ANM2 v42 inspector
 │   ├── extract_ref_frames.py         # Extracts 2 FPS overview & 10 FPS burst sheets from DL1 video
-│   └── run_visual_harness.py         # Live 30 FPS Vulkan capture -> contact sheets & MP4 clips
+│   ├── run_visual_harness.py         # Live 30 FPS Vulkan capture -> contact sheets & MP4 clips
+│   └── playtest_full_game.py         # Autonomous 4-act live Vulkan playtester via TCP JSON bridge
 ├── report/
 │   └── dl1_re/                       # Reverse-engineered Dying Light 1 specs (01..09)
 ├── scenes/
@@ -156,7 +157,8 @@ Sunfall/
 │   ├── ref_assets.gd                 # Manifest-driven GLB/texture/audio/icon loader with fallbacks
 │   ├── sfx.gd                        # Audio playback with procedural 16-bit PCM synth fallback
 │   ├── dl_reference.gd               # Dying Light 1 Data0.pak tuning constants & PASS/FAIL spec evaluator
-│   └── dl_telemetry.gd               # 60Hz movement ring-buffer, transition log, F3 scorecard & JSON dump
+│   ├── dl_telemetry.gd               # 60Hz movement ring-buffer, transition log, F3 scorecard & JSON dump
+│   └── debug/playtest_bridge.gd      # TCP JSON playtest server (-- --playtest-port=<port>)
 ├── tests/
 │   ├── verify_prototype.gd           # Headless SceneTree prototype & gameplay verification
 │   ├── verify_dl_parity.gd           # Headless physics parity suite (12 DL1 metrics + 23 functional checks)

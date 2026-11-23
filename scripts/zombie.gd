@@ -30,6 +30,8 @@ var _lunge_dir: Vector3 = Vector3.ZERO
 var _is_dying: bool = false
 var _death_timer: float = 0.0
 var _hit_freeze_timer: float = 0.0
+var _hit_lean_rot: Vector3 = Vector3.ZERO
+var _wall_slam_cd: float = 0.0
 
 var _col_shape: CollisionShape3D
 var _cap_shape: CapsuleShape3D
@@ -301,7 +303,7 @@ func _physics_process(delta: float) -> void:
 
 	if not is_on_floor():
 		velocity.y -= DLReference.GRAVITY * delta
-	else:
+	elif velocity.y < 0.0:
 		velocity.y = 0.0
 
 	if _flash_timer > 0.0:
@@ -314,7 +316,12 @@ func _physics_process(delta: float) -> void:
 	_grab_cd = maxf(0.0, _grab_cd - delta)
 	_lunge_cd = maxf(0.0, _lunge_cd - delta)
 	_ai_dodge_cd = maxf(0.0, _ai_dodge_cd - delta)
-	knockback_vel = knockback_vel.move_toward(Vector3.ZERO, 24.0 * delta)
+	_wall_slam_cd = maxf(0.0, _wall_slam_cd - delta)
+	_hit_lean_rot = _hit_lean_rot.lerp(Vector3.ZERO, clampf(delta * 10.0, 0.0, 1.0))
+	if _dl_rig != null:
+		_dl_rig.rotation = _hit_lean_rot
+	var kb_drag := (6.0 if not is_on_floor() else 22.0) * delta
+	knockback_vel = knockback_vel.move_toward(Vector3.ZERO, kb_drag)
 
 	if downed_timer > 0.0:
 		downed_timer = maxf(0.0, downed_timer - delta)
@@ -326,7 +333,38 @@ func _physics_process(delta: float) -> void:
 		_lunge_timer = 0.0
 		velocity.x = knockback_vel.x
 		velocity.z = knockback_vel.z
+		var pre_kb := knockback_vel
 		move_and_slide()
+		if _wall_slam_cd <= 0.0 and pre_kb.length() > 3.5 and is_on_wall() and get_slide_collision_count() > 0:
+			for ci in get_slide_collision_count():
+				var col := get_slide_collision(ci)
+				if col != null and not (col.get_collider() is CharacterBody3D) and absf(col.get_normal().y) < 0.45:
+					_wall_slam_cd = 0.55
+					var nrm := Vector3(col.get_normal().x, 0.0, col.get_normal().z).normalized()
+					knockback_vel = pre_kb.bounce(nrm) * 0.35
+					apply_knockdown(2.5)
+					hp -= 18.0
+					_flash_timer = 0.09
+					_refresh_sunlight_visuals()
+					Sfx.play(self, "hit", -2.0, 0.72)
+					var bridge := get_tree().root.find_child("PlaytestBridge", true, false)
+					if bridge != null and bridge.has_method("push_event"):
+						bridge.call("push_event", "wall_slam", {"dmg": 18.0, "hp": hp})
+					if hp <= 0.0:
+						apply_hit(1.0, Vector3.ZERO, 0.1)
+						return
+					break
+		if pre_kb.length() > 4.5:
+			var kb_dir := Vector3(pre_kb.x, 0.0, pre_kb.z).normalized()
+			for other in get_tree().get_nodes_in_group("enemies"):
+				if other is Zombie and other != self and is_instance_valid(other):
+					var oz := other as Zombie
+					if not oz._is_dying and oz.stagger_timer <= 0.0:
+						var to_oz := oz.global_position - global_position
+						to_oz.y = 0.0
+						var d_oz := to_oz.length()
+						if d_oz > 0.05 and d_oz <= 0.95 and kb_dir.dot(to_oz / d_oz) > 0.25:
+							oz.apply_hit(6.0, pre_kb * 0.55, 0.65)
 		_play_anim("knockdown" if (downed_timer > 0.0 or stagger_timer > 1.3) else "stagger")
 		return
 
@@ -435,11 +473,14 @@ func _find_blocking_structure() -> Structure:
 	return best
 
 
-func apply_hit(damage: float, knockback: Vector3, stagger: float = 0.35) -> bool:
+func apply_hit(damage: float, knockback: Vector3, stagger: float = 0.35, hit_dir_side: int = 0, launch_y: float = 0.0) -> bool:
 	if _is_dying:
 		return false
 	hp -= damage
 	knockback_vel = Vector3(knockback.x, 0.0, knockback.z)
+	if launch_y > 0.0:
+		velocity.y = maxf(velocity.y, launch_y)
+	_hit_lean_rot = Vector3(0.28 if launch_y > 0.5 else 0.16, 0.0, float(-hit_dir_side) * 0.24)
 	stagger_timer = maxf(stagger_timer, stagger)
 	_flash_timer = 0.07
 	_refresh_sunlight_visuals()

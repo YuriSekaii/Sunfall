@@ -142,6 +142,9 @@ var _melee_sweep_end: float = 0.333
 var _melee_sweep_apex_recorded: bool = false
 var _melee_hit_targets: Array[Zombie] = []
 var _melee_candidate_ids: Dictionary = {}
+var _world_hit_done: bool = false
+var _swing_trail_mesh: MeshInstance3D
+var _swing_trail_timer: float = 0.0
 var _hit_pause_timer: float = 0.0
 
 var _kick_hit_timer: float = -1.0
@@ -304,6 +307,20 @@ func _build_rig() -> void:
 	_grapple_beam.visible = false
 	get_tree().root.call_deferred("add_child", _grapple_beam)
 
+	_swing_trail_mesh = MeshInstance3D.new()
+	var t_quad := QuadMesh.new()
+	t_quad.size = Vector2(0.72, 0.018)
+	_swing_trail_mesh.mesh = t_quad
+	_swing_trail_mesh.position = Vector3(0.0, -0.06, -0.72)
+	var t_mat := StandardMaterial3D.new()
+	t_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	t_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	t_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	t_mat.albedo_color = Color(0.92, 0.95, 1.0, 0.0)
+	_swing_trail_mesh.material_override = t_mat
+	_swing_trail_mesh.visible = false
+	_camera.add_child(_swing_trail_mesh)
+
 	_build_ghost = MeshInstance3D.new()
 	_build_ghost.visible = false
 	var ghost_mat := StandardMaterial3D.new()
@@ -425,6 +442,12 @@ func _physics_process(delta: float) -> void:
 	_dropkick_standup_timer = maxf(0.0, _dropkick_standup_timer - delta)
 	_stomp_timer = maxf(0.0, _stomp_timer - delta)
 	_swing_roll_timer = maxf(0.0, _swing_roll_timer - delta)
+	_swing_trail_timer = maxf(0.0, _swing_trail_timer - delta)
+	if is_instance_valid(_swing_trail_mesh):
+		_swing_trail_mesh.visible = _swing_trail_timer > 0.0
+		if _swing_trail_mesh.visible:
+			var t_mat := _swing_trail_mesh.material_override as StandardMaterial3D
+			t_mat.albedo_color.a = clampf(_swing_trail_timer / 0.14, 0.0, 1.0) * 0.42
 	_look_slew_phase = minf(1.0, _look_slew_phase + delta * 12.0)
 
 	if _hit_pause_timer > 0.0:
@@ -1539,6 +1562,7 @@ func _try_head_stomp() -> bool:
 		_play_fpp_anim("stomp", true)
 	Sfx.play(self, "hit", -1.0, 0.68)
 	_spawn_impact_burst(best.global_position + Vector3(0.0, 0.3, 0.0), Color(0.88, 0.08, 0.08))
+	_push_playtest_event("stomp", {"hp": best.hp})
 	log_message.emit("Head Stomp!")
 	return true
 
@@ -1715,7 +1739,11 @@ func _update_camera_and_viewmodel(delta: float) -> void:
 
 	if _fpp_rig != null:
 		var target_rig_pos := Vector3(0.0, 0.0, 0.16)
-		if _slide_timer > 0.0:
+		if _dropkicking:
+			target_rig_pos = Vector3(0.0, 0.24, -0.18)
+		elif _kick_anim > 0.05:
+			target_rig_pos = Vector3(0.0, 0.14, -0.08)
+		elif _slide_timer > 0.0:
 			target_rig_pos = Vector3(0.0, -0.52, 0.46)
 		elif _is_crouching:
 			target_rig_pos = Vector3(0.0, -0.56, 0.46)
@@ -1861,6 +1889,10 @@ func _melee_swing(heavy: bool = false) -> void:
 	_melee_sweep_active = true
 	_melee_sweep_elapsed = 0.0
 	_melee_sweep_apex_recorded = false
+	_world_hit_done = false
+	_swing_trail_timer = 0.09
+	if is_instance_valid(_swing_trail_mesh):
+		_swing_trail_mesh.rotation.z = deg_to_rad(18.0 if is_rl else -18.0)
 	_melee_hit_targets.clear()
 	_melee_candidate_ids.clear()
 	if get_tree() != null:
@@ -1931,6 +1963,19 @@ func _process_melee_sweep(heavy: bool, is_exh: bool) -> int:
 					_apply_melee_hit_to_zombie(z, target_pt, forward, base_dmg, stam_cost, knock_mul, stagger_dur, heavy, is_exh)
 					new_hits += 1
 
+	# 3. Solid-surface weapon hit & bounce when no zombie was struck
+	if _melee_hit_targets.is_empty() and not _world_hit_done:
+		var surf_hit := space.intersect_ray(PhysicsRayQueryParameters3D.create(from, from + forward * (reach * 0.88), 1 | 16, [get_rid()]))
+		if not surf_hit.is_empty():
+			_world_hit_done = true
+			_hit_pause_timer = 0.048
+			_cam_punch = 0.06
+			_shake_intensity = maxf(_shake_intensity, 0.07)
+			_swing_roll_impulse = -_swing_roll_impulse * 0.7
+			Sfx.play(self, "hit", -4.5, randf_range(1.25, 1.45))
+			_spawn_surface_hit_fx(Vector3(surf_hit["position"]), Vector3(surf_hit["normal"]))
+			_push_playtest_event("world_bounce", {"pos": [surf_hit["position"].x, surf_hit["position"].y, surf_hit["position"].z]})
+
 	return new_hits
 
 
@@ -1945,7 +1990,10 @@ func _apply_melee_hit_to_zombie(z: Zombie, hit_pos: Vector3, dir: Vector3, base_
 
 	var is_crit := z.is_headshot_pos(hit_pos)
 	var dmg := base_dmg * (2.0 if is_crit else 1.0)
-	var killed := z.apply_hit(dmg, dir * knock_mul, stagger_dur)
+	var right_flat := Vector3(transform.basis.x.x, 0.0, transform.basis.x.z).normalized()
+	var slash_dir := (Vector3(dir.x, 0.0, dir.z).normalized() * 0.72 + right_flat * float(-_combo_side) * 0.28).normalized()
+	var launch_y := 2.0 if heavy else 0.0
+	var killed := z.apply_hit(dmg, slash_dir * knock_mul, stagger_dur, _combo_side, launch_y)
 	z.pause_hit_freeze(0.055 if not heavy else 0.085)
 	if first_hit:
 		_hit_pause_timer = 0.055 if not heavy else 0.085
@@ -1954,7 +2002,8 @@ func _apply_melee_hit_to_zombie(z: Zombie, hit_pos: Vector3, dir: Vector3, base_
 	_cam_punch = -0.11 if heavy else -0.065
 	_shake_intensity = maxf(_shake_intensity, 0.09 if heavy else 0.05)
 	Sfx.play(self, "hit", -2.0 if heavy else -3.0, 0.82 if heavy else randf_range(0.9, 1.12))
-	_spawn_impact_burst(hit_pos, Color(1.0, 0.22, 0.12) if is_crit else Color(0.86, 0.08, 0.08))
+	_spawn_impact_burst(hit_pos, Color(0.45, 0.02, 0.02), slash_dir)
+	_push_playtest_event("melee_hit", {"dmg": dmg, "crit": is_crit, "heavy": heavy, "hp": z.hp})
 	if killed:
 		log_message.emit("HEADSHOT! Eliminated infected." if is_crit else "Eliminated infected.")
 	elif is_crit:
@@ -1979,27 +2028,84 @@ func _execute_melee_apex_hit(heavy: bool, is_exh: bool = false) -> bool:
 	return hits > 0 or not _melee_hit_targets.is_empty()
 
 
-func _spawn_impact_burst(pos: Vector3, tint: Color) -> void:
+func _push_playtest_event(kind: String, data: Dictionary = {}) -> void:
+	if get_tree() == null:
+		return
+	var bridge := get_tree().root.find_child("PlaytestBridge", true, false)
+	if bridge != null and bridge.has_method("push_event"):
+		bridge.call("push_event", kind, data)
+
+
+func _spawn_surface_hit_fx(pos: Vector3, normal: Vector3) -> void:
+	var parent := get_parent()
+	if parent == null or DisplayServer.get_name() == "headless":
+		return
+	var smat := StandardMaterial3D.new()
+	smat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	smat.albedo_color = Color(1.0, 0.78, 0.32)
+	for _i in 8:
+		var p := MeshInstance3D.new()
+		var cap := CapsuleMesh.new()
+		cap.radius = 0.009
+		cap.height = 0.08
+		p.mesh = cap
+		p.material_override = smat
+		parent.add_child(p)
+		p.global_position = pos + normal * 0.03
+		var vel := (normal + Vector3(randf_range(-0.9, 0.9), randf_range(-0.4, 0.9), randf_range(-0.9, 0.9))).normalized() * randf_range(3.5, 7.0)
+		p.look_at(p.global_position + vel, Vector3.UP)
+		p.rotate_object_local(Vector3.RIGHT, PI * 0.5)
+		var tw := p.create_tween()
+		tw.tween_property(p, "global_position", pos + vel * 0.16 + Vector3(0.0, -0.22, 0.0), 0.18)
+		tw.parallel().tween_property(p, "scale", Vector3(0.1, 0.1, 0.1), 0.18)
+		tw.finished.connect(p.queue_free)
+
+
+func _spawn_impact_burst(pos: Vector3, tint: Color, bias_dir: Vector3 = Vector3.ZERO) -> void:
 	var parent := get_parent()
 	if parent == null or DisplayServer.get_name() == "headless":
 		return
 	var mat := StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.albedo_color = tint
-	for i in 16:
+	mat.albedo_color = Color(0.36, 0.015, 0.015).lerp(tint, 0.35)
+	mat.roughness = 0.18
+	for _i in 14:
 		var p := MeshInstance3D.new()
-		var box := BoxMesh.new()
-		var sz := randf_range(0.04, 0.09)
-		box.size = Vector3(sz, sz, sz)
-		p.mesh = box
+		var cap := CapsuleMesh.new()
+		cap.radius = randf_range(0.010, 0.018)
+		cap.height = randf_range(0.09, 0.18)
+		p.mesh = cap
 		p.material_override = mat
 		parent.add_child(p)
 		p.global_position = pos
-		var vel := Vector3(randf_range(-1.3, 1.3), randf_range(0.3, 1.8), randf_range(-1.3, 1.3)).normalized() * randf_range(2.4, 5.8)
+		var vel := (bias_dir * 0.75 + Vector3(randf_range(-1.0, 1.0), randf_range(0.15, 1.3), randf_range(-1.0, 1.0))).normalized() * randf_range(2.6, 6.2)
+		p.look_at(pos + vel, Vector3.UP)
+		p.rotate_object_local(Vector3.RIGHT, PI * 0.5)
 		var tw := p.create_tween()
-		tw.tween_property(p, "global_position", pos + vel * 0.24 + Vector3(0.0, -0.35, 0.0), 0.26)
-		tw.parallel().tween_property(p, "scale", Vector3(0.05, 0.05, 0.05), 0.26)
+		tw.tween_property(p, "global_position", pos + vel * 0.24 + Vector3(0.0, -0.45, 0.0), 0.26)
+		tw.parallel().tween_property(p, "scale", Vector3(0.15, 0.15, 0.15), 0.26)
 		tw.finished.connect(p.queue_free)
+
+	var space := get_world_3d().direct_space_state
+	var fl_hit := space.intersect_ray(PhysicsRayQueryParameters3D.create(pos + Vector3(0.0, 0.2, 0.0), pos + Vector3(0.0, -2.5, 0.0), 1, [get_rid()]))
+	if not fl_hit.is_empty():
+		var decal := MeshInstance3D.new()
+		var cyl := CylinderMesh.new()
+		var rad := randf_range(0.28, 0.52)
+		cyl.top_radius = rad
+		cyl.bottom_radius = rad
+		cyl.height = 0.012
+		decal.mesh = cyl
+		var dmat := StandardMaterial3D.new()
+		dmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		dmat.albedo_color = Color(0.28, 0.01, 0.01, 0.78)
+		dmat.roughness = 0.15
+		decal.material_override = dmat
+		parent.add_child(decal)
+		decal.global_position = Vector3(fl_hit["position"]) + Vector3(0.0, 0.008, 0.0)
+		var tw_d := decal.create_tween()
+		tw_d.tween_interval(10.0)
+		tw_d.tween_property(dmat, "albedo_color:a", 0.0, 2.0)
+		tw_d.finished.connect(decal.queue_free)
 
 
 func _trigger_slide_kick() -> void:
@@ -2082,12 +2188,14 @@ func _execute_kick_hit(is_dropkick: bool, power_mul: float = 1.0) -> bool:
 			break
 	if not hit.is_empty() and hit["collider"] is Zombie:
 		var z := hit["collider"] as Zombie
-		var knock := (23.0 if is_dropkick else 11.5) * power_mul
+		var knock := (15.5 if is_dropkick else 11.5) * power_mul
 		var dmg := (40.0 if is_dropkick else 8.0) * power_mul
 		var stag := 1.6 if is_dropkick else 1.1
-		z.apply_hit(dmg, dir * knock, stag)
+		var launch_y := 4.2 if is_dropkick else 1.2
+		z.apply_hit(dmg, Vector3(dir.x, 0.0, dir.z).normalized() * knock, stag, 0, launch_y)
 		if is_dropkick or power_mul > 1.2:
-			z.apply_knockdown(2.5)
+			z.apply_knockdown(2.8)
+		_spawn_impact_burst(Vector3(hit["position"]), Color(0.45, 0.02, 0.02), dir)
 		_shake_intensity = maxf(_shake_intensity, 0.10 if is_dropkick else 0.06)
 		Sfx.play(self, "hit", -1.5 if is_dropkick else -2.0, 0.72 if is_dropkick else 0.78)
 		if is_dropkick:

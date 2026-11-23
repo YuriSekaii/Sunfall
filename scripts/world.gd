@@ -86,10 +86,19 @@ func _ready() -> void:
 	_maintain_outdoor_zombies()
 	_push_log("Plane crashed! Gather loot before sundown (Day 1/10).")
 	var cap_dir := ""
+	var playtest_port := 0
 	for arg in OS.get_cmdline_user_args():
 		if arg.begins_with("--visual-capture="):
 			cap_dir = arg.substr("--visual-capture=".length())
-	if not cap_dir.is_empty():
+		elif arg.begins_with("--playtest-port="):
+			playtest_port = int(arg.substr("--playtest-port=".length()))
+	if playtest_port > 0:
+		var bridge_script := load("res://scripts/debug/playtest_bridge.gd") as GDScript
+		var bridge: Node = bridge_script.new()
+		bridge.name = "PlaytestBridge"
+		bridge.call("setup", self, _player, playtest_port)
+		add_child(bridge)
+	elif not cap_dir.is_empty():
 		var harness_script := load("res://tests/live_visual_harness.gd") as GDScript
 		var harness: Node = harness_script.new()
 		harness.call("setup", self, _player, cap_dir)
@@ -404,7 +413,7 @@ func _build_island() -> void:
 	_make_box(Vector3(-15.3, 1.8, -15.5), Vector3(5.0, 3.6, 3.4), Color(0.68, 0.72, 0.66), true, "concrete") # 3.6m wall-run exit rooftop
 
 	for p in [
-		Vector3(-7.5, 1.2, -2.0),
+		Vector3(-8.3, 1.2, -2.0),
 		Vector3(-8.5, 2.2, -6.5),
 		Vector3(-8.5, 3.6, -11.5),
 		Vector3(-15.3, 3.6, -15.5),
