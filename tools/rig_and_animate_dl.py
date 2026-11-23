@@ -447,8 +447,8 @@ def build_fpp_player() -> tuple[bpy.types.Object, bpy.types.Object, str]:
     bpy.context.scene.render.fps = 120
 
     arm_pose_fpp = {
-        "L": ((-0.18, -0.06, 1.36), (-0.28, 0.10, 1.16), (-0.24, 0.24, 1.24), (-0.19, 0.32, 1.25)),
-        "R": ((0.18, -0.06, 1.36), (0.27, 0.16, 1.18), (0.22, 0.36, 1.31), (0.19, 0.46, 1.34)),
+        "L": ((-0.18, -0.06, 1.36), (-0.28, 0.05, 1.06), (-0.24, 0.16, 1.11), (-0.19, 0.24, 1.12)),
+        "R": ((0.18, -0.06, 1.36), (0.27, 0.14, 1.10), (0.22, 0.34, 1.22), (0.19, 0.44, 1.25)),
     }
     sh_l, el_l, wr_l, fg_l = arm_pose_fpp["L"]
     sh_r, el_r, wr_r, fg_r = arm_pose_fpp["R"]
@@ -706,28 +706,28 @@ def build_fpp_player() -> tuple[bpy.types.Object, bpy.types.Object, str]:
         ],
         # swing_right: FPP_Stick_Melee_Attack_RL_Empty 66..84 @ 30fps = 0.600s (73 frames), damage [0.093s..0.333s], CAMERA_ROLL -6 @ 0.20s
         "swing_right": [
-            (1, {"UpperArm.R": (24, -36, -42), "Forearm.R": (24, -10, -10), "Chest": (4, 0, -18),
+            (1, {"UpperArm.R": (28, -36, -42), "Forearm.R": (24, -10, -10), "UpperArm.L": (22, 0, 10), "Forearm.L": (18, 0, 0), "Chest": (4, 0, -18),
                  "EyeCamera": (1.5, 3.0, -3.0), "EyeCamera_loc": (0.0, -0.01, 0.0)}, (0, 0, 0)),
-            (12, {"UpperArm.R": (44, 18, 28), "Forearm.R": (-14, 16, 18), "Hand.R": (12, 0, 14), "Chest": (-6, 0, 10),
+            (12, {"UpperArm.R": (50, 18, 28), "Forearm.R": (-14, 16, 18), "Hand.R": (12, 0, 14), "UpperArm.L": (42, -10, 18), "Forearm.L": (26, 0, 0), "Chest": (-6, 0, 10),
                   "EyeCamera": (-1.8, -5.0, 3.0), "EyeCamera_loc": (0.0, 0.02, -0.01)}, (0, 0.01, 0)),
-            (25, {"UpperArm.R": (56, 48, 64), "Forearm.R": (-24, 24, 30), "Hand.R": (22, 0, 24), "Chest": (-10, 0, 24),
+            (25, {"UpperArm.R": (62, 48, 64), "Forearm.R": (-24, 24, 30), "Hand.R": (22, 0, 24), "UpperArm.L": (48, -16, 22), "Forearm.L": (32, 0, 0), "Chest": (-10, 0, 24),
                   "EyeCamera": (-3.2, -7.0, 5.5), "EyeCamera_loc": (-0.015, 0.03, -0.02)}, (0, 0.02, 0)),
-            (41, {"UpperArm.R": (38, 34, 46), "Forearm.R": (-16, 16, 20), "Hand.R": (14, 0, 14), "Chest": (-6, 0, 14),
+            (41, {"UpperArm.R": (42, 34, 46), "Forearm.R": (-16, 16, 20), "Hand.R": (14, 0, 14), "UpperArm.L": (30, -8, 12), "Forearm.L": (20, 0, 0), "Chest": (-6, 0, 14),
                   "EyeCamera": (-1.6, -3.5, 2.8), "EyeCamera_loc": (-0.008, 0.015, -0.01)}, (0, 0.01, 0)),
-            (73, {"UpperArm.R": (0, 0, 0), "Forearm.R": (0, 0, 0), "Hand.R": (0, 0, 0), "Chest": (0, 0, 0),
+            (73, {"UpperArm.R": (0, 0, 0), "Forearm.R": (0, 0, 0), "Hand.R": (0, 0, 0), "UpperArm.L": (0, 0, 0), "Forearm.L": (0, 0, 0), "Chest": (0, 0, 0),
                   "EyeCamera": (0.0, 0.0, 0.0), "EyeCamera_loc": (0.0, 0.0, 0.0)}, (0, 0, 0)),
         ],
         # swing_left: FPP_Stick_Melee_Attack_LR_Empty 43..58 @ 30fps = 0.500s (61 frames), damage [0.083s..0.333s], CAMERA_ROLL +6 @ 0.20s
         "swing_left": [
-            (1, {"UpperArm.R": (32, 36, 52), "Forearm.R": (22, 10, 20), "Chest": (2, 0, 18),
+            (1, {"UpperArm.R": (36, 36, 52), "Forearm.R": (22, 10, 20), "UpperArm.L": (24, 0, 10), "Forearm.L": (18, 0, 0), "Chest": (2, 0, 18),
                  "EyeCamera": (1.5, -3.0, 3.0), "EyeCamera_loc": (0.0, -0.01, 0.0)}, (0, 0, 0)),
-            (13, {"UpperArm.R": (42, -20, -28), "Forearm.R": (-14, -14, -16), "Hand.R": (12, 0, -14), "Chest": (-6, 0, -10),
+            (13, {"UpperArm.R": (48, -20, -28), "Forearm.R": (-14, -14, -16), "Hand.R": (12, 0, -14), "UpperArm.L": (42, -10, 18), "Forearm.L": (26, 0, 0), "Chest": (-6, 0, -10),
                   "EyeCamera": (-1.8, 5.0, -3.0), "EyeCamera_loc": (0.0, 0.02, -0.01)}, (0, 0.01, 0)),
-            (25, {"UpperArm.R": (50, -46, -58), "Forearm.R": (-24, -22, -28), "Hand.R": (20, 0, -24), "Chest": (-10, 0, -22),
+            (25, {"UpperArm.R": (56, -46, -58), "Forearm.R": (-24, -22, -28), "Hand.R": (20, 0, -24), "UpperArm.L": (48, -16, 22), "Forearm.L": (32, 0, 0), "Chest": (-10, 0, -22),
                   "EyeCamera": (-2.8, 7.0, -5.5), "EyeCamera_loc": (0.015, 0.03, -0.02)}, (0, 0.02, 0)),
-            (41, {"UpperArm.R": (32, -28, -36), "Forearm.R": (-14, -12, -16), "Hand.R": (12, 0, -14), "Chest": (-5, 0, -12),
+            (41, {"UpperArm.R": (36, -28, -36), "Forearm.R": (-14, -12, -16), "Hand.R": (12, 0, -14), "UpperArm.L": (28, -8, 12), "Forearm.L": (18, 0, 0), "Chest": (-5, 0, -12),
                   "EyeCamera": (-1.4, 3.5, -2.5), "EyeCamera_loc": (0.008, 0.015, -0.01)}, (0, 0.01, 0)),
-            (61, {"UpperArm.R": (0, 0, 0), "Forearm.R": (0, 0, 0), "Hand.R": (0, 0, 0), "Chest": (0, 0, 0),
+            (61, {"UpperArm.R": (0, 0, 0), "Forearm.R": (0, 0, 0), "Hand.R": (0, 0, 0), "UpperArm.L": (0, 0, 0), "Forearm.L": (0, 0, 0), "Chest": (0, 0, 0),
                   "EyeCamera": (0.0, 0.0, 0.0), "EyeCamera_loc": (0.0, 0.0, 0.0)}, (0, 0, 0)),
         ],
         # heavy_charge: ChargeHoldDuration = 0.500s (61 frames)

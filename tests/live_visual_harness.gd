@@ -21,7 +21,7 @@ func _ready() -> void:
 	if _world.has_method("_set_mouse_captured"):
 		_world.call("_set_mouse_captured", false)
 	if _world.get("_telemetry_panel") != null:
-		(_world.get("_telemetry_panel") as Control).visible = true
+		(_world.get("_telemetry_panel") as Control).visible = false
 	call_deferred("_run_all_scenarios")
 
 

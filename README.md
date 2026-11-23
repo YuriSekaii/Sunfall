@@ -138,9 +138,10 @@ Sunfall/
 │   ├── re_dl_binary.py               # gamedll_x64_rwdi.dll RTTI/VTable & disassembly mapper
 │   ├── re_dl_fluidity.py             # Data0.pak LookParams, playerfppbodyvis & blend-time extractor
 │   ├── inspect_dl_mesh_anim.py       # Binary 40B vertex weight/UV, DDS mip & ANM2 v42 inspector
+│   ├── extract_ref_frames.py         # Extracts 2 FPS overview & 10 FPS burst sheets from DL1 video
 │   └── run_visual_harness.py         # Live 30 FPS Vulkan capture -> contact sheets & MP4 clips
 ├── report/
-│   └── dl1_re/                       # Reverse-engineered Dying Light 1 specs (01..08)
+│   └── dl1_re/                       # Reverse-engineered Dying Light 1 specs (01..09)
 ├── scenes/
 │   └── main.tscn                     # Root world scene
 ├── scripts/

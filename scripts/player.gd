@@ -1946,9 +1946,9 @@ func _apply_melee_hit_to_zombie(z: Zombie, hit_pos: Vector3, dir: Vector3, base_
 	var is_crit := z.is_headshot_pos(hit_pos)
 	var dmg := base_dmg * (2.0 if is_crit else 1.0)
 	var killed := z.apply_hit(dmg, dir * knock_mul, stagger_dur)
-	z.pause_hit_freeze(0.045)
+	z.pause_hit_freeze(0.055 if not heavy else 0.085)
 	if first_hit:
-		_hit_pause_timer = 0.045
+		_hit_pause_timer = 0.055 if not heavy else 0.085
 		if not is_exh:
 			_spend_combat_stamina(stam_cost * 0.5)
 	_cam_punch = -0.11 if heavy else -0.065
@@ -1986,16 +1986,16 @@ func _spawn_impact_burst(pos: Vector3, tint: Color) -> void:
 	var mat := StandardMaterial3D.new()
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	mat.albedo_color = tint
-	for i in 10:
+	for i in 16:
 		var p := MeshInstance3D.new()
 		var box := BoxMesh.new()
-		var sz := randf_range(0.035, 0.075)
+		var sz := randf_range(0.04, 0.09)
 		box.size = Vector3(sz, sz, sz)
 		p.mesh = box
 		p.material_override = mat
 		parent.add_child(p)
 		p.global_position = pos
-		var vel := Vector3(randf_range(-1.2, 1.2), randf_range(0.4, 1.6), randf_range(-1.2, 1.2)).normalized() * randf_range(2.2, 5.2)
+		var vel := Vector3(randf_range(-1.3, 1.3), randf_range(0.3, 1.8), randf_range(-1.3, 1.3)).normalized() * randf_range(2.4, 5.8)
 		var tw := p.create_tween()
 		tw.tween_property(p, "global_position", pos + vel * 0.24 + Vector3(0.0, -0.35, 0.0), 0.26)
 		tw.parallel().tween_property(p, "scale", Vector3(0.05, 0.05, 0.05), 0.26)
